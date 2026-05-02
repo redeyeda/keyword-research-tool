@@ -161,13 +161,38 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             "X-Customer": str(customer_id),
             "X-Signature": _ad_sig(secret_key, ts, "GET", path)}
     results = []
-    # 빈 값, 공백, 특수문자만 있는 키워드 필터링
-    clean_kw = [k.strip() for k in keywords if k and k.strip() and len(k.strip()) >= 2]
-    clean_kw = list(dict.fromkeys(clean_kw))  # 중복제거
+    # 키워드 정제: 빈값, 2자 미만, 쉼표/제어문자 포함 항목 제거
+    def clean_keyword(k):
+        if not k: return ""
+        k = str(k).strip()
+        k = re.sub(r"[,\t\n\r]", " ", k)  # 쉼표 제어문자 제거 쉼표·제어문자 → 공백
+        k = re.sub(r"\s+", " ", k).strip()  # 연속공백 정리
+        return k if len(k) >= 2 else ""
+
+    clean_kw = []
+    for k in keywords:
+        ck = clean_keyword(k)
+        if ck and ck not in clean_kw:
+            clean_kw.append(ck)
+
     if not clean_kw:
         st.warning("유효한 키워드가 없습니다.")
         return []
-    for i in range(0, len(clean_kw), 5):
+
+    # 첫 번째 키워드로 API 연결 테스트
+    test_params = {"hintKeywords": clean_kw[0], "showDetail": "1"}
+    try:
+        test_r = requests.get(BASE+path, headers=hdrs, params=test_params, timeout=15)
+        if test_r.status_code != 200:
+            st.error(f"네이버 광고API 연결 실패 [{test_r.status_code}]: {test_r.text[:300]}")
+            return []
+        results.extend(test_r.json().get("keywordList", []))
+    except Exception as e:
+        st.error(f"네이버 광고API 연결 오류: {e}")
+        return []
+
+    # 나머지 키워드 배치 처리
+    for i in range(1, len(clean_kw), 5):
         batch = clean_kw[i:i+5]
         try:
             r = requests.get(BASE+path, headers=hdrs,
@@ -175,10 +200,8 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
                              timeout=15)
             if r.status_code == 200:
                 results.extend(r.json().get("keywordList", []))
-            else:
-                st.warning(f"광고API 오류[{r.status_code}]: {r.text[:200]}")
         except Exception as e:
-            st.warning(f"광고API 실패: {e}")
+            pass
         time.sleep(0.3)
     return results
 
