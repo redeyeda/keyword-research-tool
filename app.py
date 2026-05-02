@@ -161,8 +161,14 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             "X-Customer": str(customer_id),
             "X-Signature": _ad_sig(secret_key, ts, "GET", path)}
     results = []
-    for i in range(0, len(keywords), 5):
-        batch = keywords[i:i+5]
+    # 빈 값, 공백, 특수문자만 있는 키워드 필터링
+    clean_kw = [k.strip() for k in keywords if k and k.strip() and len(k.strip()) >= 2]
+    clean_kw = list(dict.fromkeys(clean_kw))  # 중복제거
+    if not clean_kw:
+        st.warning("유효한 키워드가 없습니다.")
+        return []
+    for i in range(0, len(clean_kw), 5):
+        batch = clean_kw[i:i+5]
         try:
             r = requests.get(BASE+path, headers=hdrs,
                              params={"hintKeywords": ",".join(batch), "showDetail": "1"},
@@ -485,7 +491,6 @@ if run_btn:
     if not naver_api_key:         missing.append("광고API - ACCESS_LICENSE")
     if not naver_secret_key:      missing.append("광고API - SECRET_KEY")
     if not naver_customer_id:     missing.append("광고API - CUSTOMER_ID")
-    if not claude_api_key:        missing.append("Claude API Key")
     if missing:
         st.error(f"⛔ 입력 필요: {', '.join(missing)}")
         st.stop()
@@ -508,8 +513,15 @@ if run_btn:
 
     # ② Claude 롱테일
     log.info("③ Claude AI 롱테일 생성 중...")
-    claude_naver, claude_google = get_claude_longtail(main_keyword.strip(), claude_api_key)
-    prog.progress(30, text=f"AI 롱테일 네이버 {len(claude_naver)}개 / 구글 {len(claude_google)}개")
+    claude_naver, claude_google = [], []
+    if claude_api_key:
+        claude_naver, claude_google = get_claude_longtail(main_keyword.strip(), claude_api_key)
+        if claude_naver or claude_google:
+            prog.progress(30, text=f"AI 롱테일 네이버 {len(claude_naver)}개 / 구글 {len(claude_google)}개")
+        else:
+            prog.progress(30, text="AI 롱테일 생성 실패 (크레딧 확인) → 자동완성 키워드로 진행")
+    else:
+        prog.progress(30, text="Claude API 키 없음 → 자동완성 키워드로 진행")
 
     # ③ 통합
     all_kw = list(dict.fromkeys(
