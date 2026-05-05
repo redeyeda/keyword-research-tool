@@ -153,12 +153,24 @@ def _ad_sig(secret_key, timestamp, method, path):
     h   = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256)
     return base64.b64encode(h.digest()).decode()
 
+def _clean_key(val):
+    """API 키에서 공백·줄바꿈·따옴표 제거"""
+    if not val: return ""
+    return str(val).strip().strip('"').strip("'").strip()
+
 def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
-    BASE = "https://api.searchad.naver.com"
-    path = "/keywordstool"
-    ts   = str(int(time.time() * 1000))
+    BASE       = "https://api.searchad.naver.com"
+    path       = "/keywordstool"
+    ts         = str(int(time.time() * 1000))
+    api_key    = _clean_key(api_key)
+    secret_key = _clean_key(secret_key)
+    # customer_id 정제 (숫자만 추출)
+    cid = re.sub(r"[^0-9]", "", str(customer_id).strip())
+    if not cid:
+        st.error("CUSTOMER_ID가 비어있습니다. Secrets에서 naver_customer_id 확인하세요.")
+        return []
     hdrs = {"X-Timestamp": ts, "X-API-KEY": api_key,
-            "X-Customer": str(customer_id),
+            "X-Customer": cid,
             "X-Signature": _ad_sig(secret_key, ts, "GET", path)}
     results = []
     # 키워드 정제: 빈값, 2자 미만, 쉼표/제어문자 포함 항목 제거
@@ -273,71 +285,105 @@ def get_blog_doc_count(keyword, client_id, client_secret):
     return -1
 
 def get_search_trend(keywords_batch, client_id, client_secret):
+    """데이터랩 검색어 트렌드 — 최근 6개월 방향 분석"""
     end_date   = datetime.today()
     start_date = end_date - timedelta(days=180)
+    # 키워드 그룹명과 실제 키워드 매핑 보존
+    kw_list = [k.strip() for k in keywords_batch[:5] if k and k.strip()]
+    if not kw_list:
+        return {}
     body = {
-        "startDate": start_date.strftime("%Y-%m-%d"),
-        "endDate":   end_date.strftime("%Y-%m-%d"),
-        "timeUnit":  "month",
-        "keywordGroups": [{"groupName": kw, "keywords": [kw]} for kw in keywords_batch[:5]],
+        "startDate":     start_date.strftime("%Y-%m-%d"),
+        "endDate":       end_date.strftime("%Y-%m-%d"),
+        "timeUnit":      "month",
+        "keywordGroups": [{"groupName": kw, "keywords": [kw]} for kw in kw_list],
     }
     try:
-        r = requests.post("https://openapi.naver.com/v1/datalab/search",
-                          headers={"X-Naver-Client-Id": client_id,
-                                   "X-Naver-Client-Secret": client_secret,
-                                   "Content-Type": "application/json"},
-                          data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                          timeout=15)
+        r = requests.post(
+            "https://openapi.naver.com/v1/datalab/search",
+            headers={
+                "X-Naver-Client-Id":     _clean_key(client_id),
+                "X-Naver-Client-Secret": _clean_key(client_secret),
+                "Content-Type":          "application/json",
+            },
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            timeout=15,
+        )
         if r.status_code != 200:
+            st.warning(f"트렌드 API 오류[{r.status_code}]: {r.text[:200]}")
             return {}
         result = {}
         for group in r.json().get("results", []):
-            kw   = group["title"]
+            kw   = group.get("title", "")
             data = group.get("data", [])
-            if len(data) < 4:
+            if not data or len(data) < 2:
                 result[kw] = "→ 유지"
                 continue
-            h = len(data) // 2
-            first  = sum(d["ratio"] for d in data[:h]) / h
-            second = sum(d["ratio"] for d in data[h:]) / (len(data) - h)
+            h      = max(len(data) // 2, 1)
+            first  = sum(d.get("ratio", 0) for d in data[:h]) / h
+            second = sum(d.get("ratio", 0) for d in data[h:]) / max(len(data) - h, 1)
             if first == 0:
                 result[kw] = "→ 유지"
                 continue
             chg = (second - first) / first * 100
-            result[kw] = ("↑ 급상승" if chg>=25 else "↗ 상승" if chg>=10
-                          else "→ 유지" if chg>=-5 else "↘ 하락" if chg>=-20 else "↓ 급하락")
+            result[kw] = (
+                "↑ 급상승" if chg >= 25  else
+                "↗ 상승"   if chg >= 10  else
+                "→ 유지"   if chg >= -5  else
+                "↘ 하락"   if chg >= -20 else
+                "↓ 급하락"
+            )
         return result
-    except: return {}
+    except Exception as e:
+        st.warning(f"트렌드 API 오류: {e}")
+        return {}
 
 def get_shopping_insight(keywords_batch, client_id, client_secret):
+    """
+    데이터랩 쇼핑인사이트 — 키워드별 쇼핑 클릭 비율
+    올바른 엔드포인트: /v1/datalab/shopping/keywords/ratio
+    키워드 형식: [{"name": "키워드", "param": ["키워드"]}]
+    """
     end_date   = datetime.today()
     start_date = end_date - timedelta(days=90)
+    kw_list = [k.strip() for k in keywords_batch[:5] if k and k.strip()]
+    if not kw_list:
+        return {}
     body = {
         "startDate": start_date.strftime("%Y-%m-%d"),
         "endDate":   end_date.strftime("%Y-%m-%d"),
         "timeUnit":  "month",
         "category":  "50000000",
-        "keyword":   keywords_batch[:5],
-        "device": "", "ages": [], "gender": "",
+        "keyword":   [{"name": kw, "param": [kw]} for kw in kw_list],
+        "device":    "",
+        "ages":      [],
+        "gender":    "",
     }
     try:
         r = requests.post(
-            "https://openapi.naver.com/v1/datalab/shopping/categories/keywords/ratio",
-            headers={"X-Naver-Client-Id": client_id,
-                     "X-Naver-Client-Secret": client_secret,
-                     "Content-Type": "application/json"},
+            "https://openapi.naver.com/v1/datalab/shopping/keywords/ratio",
+            headers={
+                "X-Naver-Client-Id":     _clean_key(client_id),
+                "X-Naver-Client-Secret": _clean_key(client_secret),
+                "Content-Type":          "application/json",
+            },
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            timeout=15)
+            timeout=15,
+        )
         if r.status_code != 200:
+            st.warning(f"쇼핑인사이트 API 오류[{r.status_code}]: {r.text[:200]}")
             return {}
         result = {}
         for group in r.json().get("results", []):
             kw   = group.get("title", "")
             data = group.get("data", [])
             if data:
-                result[kw] = round(sum(d.get("ratio",0) for d in data)/len(data), 2)
+                avg = sum(d.get("ratio", 0) for d in data) / len(data)
+                result[kw] = round(avg, 2)
         return result
-    except: return {}
+    except Exception as e:
+        st.warning(f"쇼핑인사이트 API 오류: {e}")
+        return {}
 
 
 # ══════════════════════════════════════════════════════════════
