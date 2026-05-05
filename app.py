@@ -566,8 +566,8 @@ with col2:
     run_btn = st.button("🚀 분석 시작", use_container_width=True, type="primary")
 
 with st.expander("⚙️ 고급 옵션"):
-    top_n = st.slider("트렌드·쇼핑 API 호출 키워드 수 (상위 N개)", 10, 50, 30, 5)
-    st.caption("전체 키워드 중 검색량 상위 N개에만 트렌드·쇼핑 API를 호출합니다. (속도·API 비용 최적화)")
+    top_n = st.slider("트렌드·쇼핑 API 호출 키워드 수 (상위 N개)", 10, 100, 50, 10)
+    st.caption("검색량 상위 N개에만 블로그문서수·트렌드 API를 호출합니다. N을 높이면 미조회가 줄지만 속도가 느려집니다.")
 
 st.divider()
 
@@ -624,7 +624,17 @@ if run_btn:
         st.error("⛔ 네이버 광고API 데이터 없음. API 키를 확인하세요.")
         st.stop()
 
-    # 상위 N개 선별
+    # 중복 제거 (relKeyword 기준)
+    seen = set()
+    unique_stats = []
+    for k in naver_stats:
+        kw = k.get("relKeyword","").strip()
+        if kw and kw not in seen:
+            seen.add(kw)
+            unique_stats.append(k)
+    naver_stats = unique_stats
+
+    # 상위 N개 선별 (검색량 기준)
     sorted_stats = sorted(naver_stats, key=lambda k: _parse_count(k.get("monthlyPcQcCnt",0))+_parse_count(k.get("monthlyMobileQcCnt",0)), reverse=True)
     top_kws = [k.get("relKeyword","") for k in sorted_stats[:top_n] if k.get("relKeyword")]
 
