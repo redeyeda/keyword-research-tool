@@ -185,7 +185,7 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             continue
         k = str(k).strip()
         # 한글, 영문, 숫자, 공백만 허용
-        k = re.sub(r"[^가-힣ᄀ-ᇿ㄰-㆏a-zA-Z0-9\s]", "", k)
+        k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
         k = " ".join(k.split()).strip()
         if len(k) >= 2 and k not in clean_kw:
             clean_kw.append(k)
@@ -271,8 +271,11 @@ def get_claude_longtail(main_keyword, api_key):
 
 반드시 JSON만:
 {{"naver_keywords":["키워드",...20개],"google_keywords":["키워드",...20개]}}"""
-        msg   = client.messages.create(model="claude-sonnet-4-20250514", max_tokens=1500,
-                                       messages=[{"role": "user", "content": prompt}])
+        msg   = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt.encode("utf-8").decode("utf-8")}]
+        )
         text  = msg.content[0].text
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
@@ -500,7 +503,7 @@ def to_excel_bytes(rows):
     df_all    = pd.DataFrame(rows)
     df_naver  = df_all[df_all["네이버블로그_적합도"]>=60].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_google = df_all[df_all["구글티스토리_적합도"]>=60].sort_values("구글티스토리_적합도",ascending=False).reset_index(drop=True)
-    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=40)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
+    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=15)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
     df_trend  = df_all[df_all["트렌드(6개월)"].isin(["↑ 급상승","↗ 상승"])].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_full   = df_all.sort_values("월간검색(합계)",ascending=False).reset_index(drop=True)
 
@@ -648,7 +651,7 @@ if run_btn:
     # 요약
     n_rec = sum(1 for r in scored if r["네이버블로그_적합도"]>=60)
     g_rec = sum(1 for r in scored if r["구글티스토리_적합도"]>=60)
-    s_rec = sum(1 for r in scored if isinstance(r["쇼핑전환점수"],int) and r["쇼핑전환점수"]>=40)
+    s_rec = sum(1 for r in scored if isinstance(r["쇼핑전환점수"],int) and r["쇼핑전환점수"]>=15)
     t_rec = sum(1 for r in scored if r["트렌드(6개월)"] in ("↑ 급상승","↗ 상승"))
 
     c1,c2,c3,c4,c5 = st.columns(5)
@@ -662,7 +665,7 @@ if run_btn:
     df_all    = pd.DataFrame(scored)
     df_naver  = df_all[df_all["네이버블로그_적합도"]>=60].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_google = df_all[df_all["구글티스토리_적합도"]>=60].sort_values("구글티스토리_적합도",ascending=False).reset_index(drop=True)
-    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=40)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
+    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=15)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
     df_trend  = df_all[df_all["트렌드(6개월)"].isin(["↑ 급상승","↗ 상승"])].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
 
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["📝 네이버 블로그","🔍 구글/티스토리","🛒 쇼핑몰 연결","⚡ 트렌드 상승","📊 전체"])
