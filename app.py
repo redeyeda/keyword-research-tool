@@ -353,7 +353,6 @@ def get_shopping_insight(keywords_batch, client_id, client_secret):
         "startDate": start_date.strftime("%Y-%m-%d"),
         "endDate":   end_date.strftime("%Y-%m-%d"),
         "timeUnit":  "month",
-        "category":  "50000000",
         "keyword":   [{"name": kw, "param": [kw]} for kw in kw_list],
         "device":    "",
         "ages":      [],
