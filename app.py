@@ -361,7 +361,7 @@ def get_shopping_insight(keywords_batch, client_id, client_secret):
     }
     try:
         r = requests.post(
-            "https://openapi.naver.com/v1/datalab/shopping/keywords/ratio",
+            "https://openapi.naver.com/v1/datalab/shopping/keywords/trend",
             headers={
                 "X-Naver-Client-Id":     _clean_key(client_id),
                 "X-Naver-Client-Secret": _clean_key(client_secret),
