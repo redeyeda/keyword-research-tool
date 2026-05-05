@@ -194,35 +194,56 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.warning("유효한 키워드가 없습니다.")
         return []
 
-    results = []
+    results    = []
     fail_count = 0
+    MAX_RETRY  = 2  # 실패 시 최대 재시도 횟수
 
-    # 키워드 1개씩 개별 호출 (쉼표 조인 방식 오류 방지)
     for kw in clean_kw:
-        hdrs = _make_ad_headers(api_key, secret_key, cid, path)
-        try:
-            r = requests.get(
-                BASE + path,
-                headers=hdrs,
-                params={"hintKeywords": kw, "showDetail": "1"},
-                timeout=15,
-            )
-            if r.status_code == 200:
-                results.extend(r.json().get("keywordList", []))
-            else:
-                fail_count += 1
-                if len(results) == 0 and fail_count == 1:
-                    st.error(f"네이버 광고API 오류[{r.status_code}]: {r.text[:300]}")
-                    return []
-        except Exception as e:
-            fail_count += 1
-            if len(results) == 0 and fail_count == 1:
-                st.error(f"네이버 광고API 연결 오류: {e}")
-                return []
-        time.sleep(0.15)  # 과호출 방지
+        success = False
+        for attempt in range(MAX_RETRY):
+            if attempt > 0:
+                time.sleep(1.0)  # 재시도 전 1초 대기
+            hdrs = _make_ad_headers(api_key, secret_key, cid, path)
+            try:
+                r = requests.get(
+                    BASE + path,
+                    headers=hdrs,
+                    params={"hintKeywords": kw, "showDetail": "1"},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    results.extend(r.json().get("keywordList", []))
+                    success = True
+                    break
+                elif r.status_code == 400:
+                    # 파라미터 오류 — 재시도 의미 없음, 스킵
+                    fail_count += 1
+                    break
+                elif r.status_code in (429, 500, 503):
+                    # 과호출·서버오류 — 재시도
+                    continue
+                else:
+                    if len(results) == 0 and fail_count == 0:
+                        st.error(f"네이버 광고API 오류[{r.status_code}]: {r.text[:300]}")
+                        return []
+                    fail_count += 1
+                    break
+            except Exception as e:
+                if attempt == MAX_RETRY - 1:
+                    if len(results) == 0:
+                        st.error(f"네이버 광고API 연결 오류: {e}")
+                        return []
+                    fail_count += 1
 
-    if fail_count > 0:
+        if not success:
+            fail_count += 1
+        time.sleep(0.2)  # 호출 간격
+
+    if fail_count > 0 and len(results) > 0:
         st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
+    elif fail_count > 0 and len(results) == 0:
+        st.error("네이버 광고API 전체 실패. 잠시 후 다시 시도해주세요.")
+        return []
 
     return results
 
