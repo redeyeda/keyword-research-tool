@@ -338,51 +338,40 @@ def get_search_trend(keywords_batch, client_id, client_secret):
         st.warning(f"트렌드 API 오류: {e}")
         return {}
 
+# 쇼핑 의도 키워드 (API 대신 키워드 분석으로 판별)
+SHOPPING_WORDS = [
+    "구매","구입","주문","배송","할인","세일","가격","최저가","쿠폰","무료배송",
+    "추천","후기","리뷰","사용기","구매후기","별점","평점","장단점",
+    "어디서","사는곳","파는곳","구하는곳","온라인","오프라인","매장",
+    "브랜드","정품","인기","베스트","신상","신제품","한정","품절",
+    "효과","성분","사용법","용량","ml","g","개","세트","묶음",
+]
+
 def get_shopping_insight(keywords_batch, client_id, client_secret):
     """
-    데이터랩 쇼핑인사이트 — 키워드별 쇼핑 클릭 비율
-    올바른 엔드포인트: /v1/datalab/shopping/keywords/ratio
-    키워드 형식: [{"name": "키워드", "param": ["키워드"]}]
+    쇼핑 전환 가능성 — 키워드 의미 분석 기반 (API 대체)
+    쇼핑인사이트 API가 일반 계정에서 제한되어 키워드 분석 방식으로 대체
+    반환: {keyword: ratio(0~40)}
     """
-    end_date   = datetime.today()
-    start_date = end_date - timedelta(days=90)
-    kw_list = [k.strip() for k in keywords_batch[:5] if k and k.strip()]
-    if not kw_list:
-        return {}
-    body = {
-        "startDate": start_date.strftime("%Y-%m-%d"),
-        "endDate":   end_date.strftime("%Y-%m-%d"),
-        "timeUnit":  "month",
-        "keyword":   [{"name": kw, "param": [kw]} for kw in kw_list],
-        "device":    "",
-        "ages":      [],
-        "gender":    "",
-    }
-    try:
-        r = requests.post(
-            "https://openapi.naver.com/v1/datalab/shopping/keywords/trend",
-            headers={
-                "X-Naver-Client-Id":     _clean_key(client_id),
-                "X-Naver-Client-Secret": _clean_key(client_secret),
-                "Content-Type":          "application/json",
-            },
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            timeout=15,
-        )
-        if r.status_code != 200:
-            st.warning(f"쇼핑인사이트 API 오류[{r.status_code}]: {r.text[:200]}")
-            return {}
-        result = {}
-        for group in r.json().get("results", []):
-            kw   = group.get("title", "")
-            data = group.get("data", [])
-            if data:
-                avg = sum(d.get("ratio", 0) for d in data) / len(data)
-                result[kw] = round(avg, 2)
-        return result
-    except Exception as e:
-        st.warning(f"쇼핑인사이트 API 오류: {e}")
-        return {}
+    result = {}
+    for kw in keywords_batch:
+        if not kw:
+            continue
+        score = 0
+        # 쇼핑 의도 단어 포함 여부
+        for word in SHOPPING_WORDS:
+            if word in kw:
+                score += 8
+        # 키워드 길이 — 짧을수록 구매 의도 높음
+        if len(kw) <= 5:
+            score += 10
+        elif len(kw) <= 8:
+            score += 6
+        # 숫자 포함 (용량·가격 등)
+        if any(c.isdigit() for c in kw):
+            score += 5
+        result[kw] = min(score, 40)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
