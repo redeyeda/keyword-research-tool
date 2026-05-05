@@ -227,6 +227,14 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     return results
 
 
+def _sanitize_keyword(k):
+    """키워드 정제 — 한글/영문/숫자/공백만 허용, 2자 미만 제거"""
+    if not k: return ""
+    k = str(k).strip()
+    k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
+    k = " ".join(k.split()).strip()
+    return k if len(k) >= 2 else ""
+
 def get_naver_suggest(keyword):
     try:
         r = requests.get("https://ac.search.naver.com/nx/ac",
@@ -238,7 +246,9 @@ def get_naver_suggest(keyword):
             for group in r.json().get("items", []):
                 for item in group:
                     if item and isinstance(item, list) and item[0]:
-                        out.append(item[0])
+                        clean = _sanitize_keyword(item[0])
+                        if clean and clean not in out:
+                            out.append(clean)
             return out[:20]
     except: pass
     return []
@@ -250,7 +260,13 @@ def get_google_suggest(keyword):
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         if r.status_code == 200:
             d = r.json()
-            return d[1][:20] if len(d) > 1 else []
+            raw = d[1][:20] if len(d) > 1 else []
+            out = []
+            for k in raw:
+                clean = _sanitize_keyword(k)
+                if clean and clean not in out:
+                    out.append(clean)
+            return out
     except: pass
     return []
 
