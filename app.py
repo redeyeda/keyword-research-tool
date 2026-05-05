@@ -178,13 +178,15 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다. Secrets에서 naver_customer_id 확인하세요.")
         return []
 
-    # 키워드 정제 (빈값, 2자 미만 제거)
+    # 키워드 정제 — 한글/영문/숫자/공백만 허용
     clean_kw = []
     for k in keywords:
         if not k:
             continue
         k = str(k).strip()
-        k = " ".join(k.split())
+        # 한글, 영문, 숫자, 공백만 허용
+        k = re.sub(r"[^가-힣ᄀ-ᇿ㄰-㆏a-zA-Z0-9\s]", "", k)
+        k = " ".join(k.split()).strip()
         if len(k) >= 2 and k not in clean_kw:
             clean_kw.append(k)
 
@@ -195,32 +197,32 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     results = []
     fail_count = 0
 
-    for i in range(0, len(clean_kw), 5):
-        batch = clean_kw[i:i+5]
-        # 배치마다 타임스탬프·서명 새로 생성 (만료 방지)
+    # 키워드 1개씩 개별 호출 (쉼표 조인 방식 오류 방지)
+    for kw in clean_kw:
         hdrs = _make_ad_headers(api_key, secret_key, cid, path)
         try:
             r = requests.get(
-                BASE + path, headers=hdrs,
-                params={"hintKeywords": ",".join(batch), "showDetail": "1"},
+                BASE + path,
+                headers=hdrs,
+                params={"hintKeywords": kw, "showDetail": "1"},
                 timeout=15,
             )
             if r.status_code == 200:
                 results.extend(r.json().get("keywordList", []))
             else:
                 fail_count += 1
-                if i == 0:
+                if len(results) == 0 and fail_count == 1:
                     st.error(f"네이버 광고API 오류[{r.status_code}]: {r.text[:300]}")
                     return []
         except Exception as e:
             fail_count += 1
-            if i == 0:
+            if len(results) == 0 and fail_count == 1:
                 st.error(f"네이버 광고API 연결 오류: {e}")
                 return []
-        time.sleep(0.3)
+        time.sleep(0.15)  # 과호출 방지
 
     if fail_count > 0:
-        st.warning(f"일부 배치 실패: {fail_count}건")
+        st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
 
     return results
 
