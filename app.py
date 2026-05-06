@@ -175,16 +175,14 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     # customer_id 숫자만 추출
     cid = re.sub(r"[^0-9]", "", str(customer_id).strip())
     if not cid:
-        st.error("CUSTOMER_ID가 비어있습니다. Secrets에서 naver_customer_id 확인하세요.")
+        st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
     # 키워드 정제 — 한글/영문/숫자/공백만 허용
     clean_kw = []
     for k in keywords:
-        if not k:
-            continue
+        if not k: continue
         k = str(k).strip()
-        # 한글, 영문, 숫자, 공백만 허용
         k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
         k = " ".join(k.split()).strip()
         if len(k) >= 2 and k not in clean_kw:
@@ -196,54 +194,48 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
 
     results    = []
     fail_count = 0
-    MAX_RETRY  = 2  # 실패 시 최대 재시도 횟수
 
-    for kw in clean_kw:
-        success = False
-        for attempt in range(MAX_RETRY):
-            if attempt > 0:
-                time.sleep(1.0)  # 재시도 전 1초 대기
+    for idx, kw in enumerate(clean_kw):
+        fetched = False
+
+        for attempt in range(3):   # 최대 3회 시도
             hdrs = _make_ad_headers(api_key, secret_key, cid, path)
             try:
                 r = requests.get(
-                    BASE + path,
-                    headers=hdrs,
+                    BASE + path, headers=hdrs,
                     params={"hintKeywords": kw, "showDetail": "1"},
                     timeout=15,
                 )
                 if r.status_code == 200:
                     results.extend(r.json().get("keywordList", []))
-                    success = True
+                    fetched = True
                     break
                 elif r.status_code == 400:
-                    # 파라미터 오류 — 재시도 의미 없음, 스킵
-                    fail_count += 1
+                    # 파라미터 오류 — 이 키워드 스킵 (재시도 불필요)
                     break
-                elif r.status_code in (429, 500, 503):
-                    # 과호출·서버오류 — 재시도
-                    continue
+                elif r.status_code == 403:
+                    # 인증 오류 — 전체 중단
+                    st.error(f"네이버 광고API 인증 실패[403]: {r.text[:200]}")
+                    return results if results else []
                 else:
-                    if len(results) == 0 and fail_count == 0:
-                        st.error(f"네이버 광고API 오류[{r.status_code}]: {r.text[:300]}")
-                        return []
-                    fail_count += 1
-                    break
+                    # 일시 오류 — 재시도
+                    time.sleep(1.0)
+                    continue
             except Exception as e:
-                if attempt == MAX_RETRY - 1:
-                    if len(results) == 0:
-                        st.error(f"네이버 광고API 연결 오류: {e}")
-                        return []
-                    fail_count += 1
+                time.sleep(1.0)
+                continue
 
-        if not success:
+        if not fetched:
             fail_count += 1
-        time.sleep(0.2)  # 호출 간격
 
-    if fail_count > 0 and len(results) > 0:
-        st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
-    elif fail_count > 0 and len(results) == 0:
-        st.error("네이버 광고API 전체 실패. 잠시 후 다시 시도해주세요.")
-        return []
+        # 호출 간격 (과부하 방지)
+        time.sleep(0.25)
+
+    if fail_count > 0:
+        if len(results) > 0:
+            st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
+        else:
+            st.error("모든 키워드 조회 실패. 30초 후 다시 시도해주세요.")
 
     return results
 
@@ -754,7 +746,7 @@ if run_btn:
     prog.progress(55, text=f"광고API {len(naver_stats)}개 완료")
 
     if not naver_stats:
-        st.error("⛔ 네이버 광고API 데이터 없음. API 키를 확인하세요.")
+        st.error("⛔ 네이버 광고API 데이터가 없습니다. 30초 후 다시 시도하거나 API 키를 확인하세요.")
         st.stop()
 
     # 중복 제거 (relKeyword 기준)
