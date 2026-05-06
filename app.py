@@ -143,6 +143,26 @@ with st.sidebar:
     st.caption("오픈API: developers.naver.com → 내 애플리케이션")
     st.caption("Claude: console.anthropic.com → API Keys")
 
+    st.divider()
+    st.markdown("**🏷️ 업종 프리셋**")
+    st.caption("선택하면 관련 쇼핑 단어가 자동 적용됩니다.")
+    industry = st.selectbox(
+        "업종 선택",
+        ["화장품/뷰티 (mirene)", "병원/의료 (라식·라섹·피부과)", "건강기능식품", "패션/의류", "직접입력"],
+        key="industry",
+        label_visibility="collapsed",
+    )
+
+    st.markdown("**➕ 쇼핑 연관단어 직접 추가**")
+    st.caption("쉼표로 구분해서 입력하세요.")
+    custom_words_input = st.text_area(
+        "추가 단어",
+        placeholder="예: 라식, 라섹, 스마일라식, 안과추천",
+        height=80,
+        key="custom_words",
+        label_visibility="collapsed",
+    )
+
 
 # ══════════════════════════════════════════════════════════════
 #  API 함수
@@ -396,25 +416,126 @@ def get_search_trend(keywords_batch, client_id, client_secret):
         st.warning(f"트렌드 API 오류: {e}")
         return {}
 
-# 쇼핑 의도 키워드 (API 폴백용)
-SHOPPING_WORDS = [
-    "구매","구입","주문","배송","할인","세일","가격","최저가","쿠폰","무료배송",
-    "추천","후기","리뷰","사용기","구매후기","별점","평점","장단점",
-    "어디서","사는곳","파는곳","구하는곳","온라인","오프라인","매장",
-    "브랜드","정품","인기","베스트","신상","신제품","한정","품절",
-    "효과","성분","사용법","용량","ml","g","개","세트","묶음",
+# ──────────────────────────────────────────────────────────────
+#  쇼핑 점수 고도화 (mirene.co.kr 화장품 쇼핑몰 최적화)
+# ──────────────────────────────────────────────────────────────
+
+# 1) 구매 전환 의도 — 가장 높은 가중치 (구매 직전 단계)
+SHOP_BUY_WORDS = [
+    "구매","구입","주문","결제","장바구니","구매하기","바로구매",
+    "최저가","할인","세일","쿠폰","특가","타임세일","한정특가",
+    "무료배송","당일배송","로켓배송","새벽배송","빠른배송",
+    "어디서","사는곳","파는곳","구하는곳","살수있는",
 ]
 
+# 2) 제품 탐색 의도 — 중간 가중치 (비교·선택 단계)
+SHOP_EXPLORE_WORDS = [
+    "추천","비교","순위","랭킹","베스트","인기","후기","리뷰",
+    "사용기","구매후기","솔직후기","장단점","사용해봤","써봤",
+    "효과있는","좋은","제일좋은","가장좋은","효과좋은",
+    "브랜드","정품","국내","수입","해외직구",
+]
+
+# 3) 화장품 카테고리 특화 — mirene.co.kr 상품군
+SHOP_BEAUTY_WORDS = [
+    # 스킨케어
+    "크림","세럼","에센스","앰플","토너","스킨","로션","미스트",
+    "마스크팩","선크림","선스크린","자외선차단","bb크림","cc크림",
+    "클렌저","클렌징","폼클렌징","오일클렌징","미셀라",
+    # 성분 구매 의도
+    "히알루론산","세라마이드","레티놀","나이아신아마이드","비타민c",
+    "콜라겐","펩타이드","글루타치온","아데노신","EGF","병풀",
+    # 피부 고민별
+    "미백","주름","탄력","보습","수분","진정","모공","여드름",
+    "민감성","건성","지성","복합성","트러블","칙칙한","잡티",
+    # 병원·시술 연관 (병원 마케팅 연결)
+    "리프팅","필러","보톡스","레이저","피부과","시술후","관리",
+    "항노화","안티에이징","재생","피부장벽","줄기세포",
+    # 제형·용량
+    "ml","g","oz","개입","세트","묶음","기획세트","트라이얼",
+    "미니","풀사이즈","리필","대용량","소용량",
+]
+
+# 4) 가격 관련
+SHOP_PRICE_WORDS = [
+    "가격","얼마","원짜리","만원","천원","저렴","가성비",
+    "비싼","고가","럭셔리","프리미엄","중저가","가격비교",
+]
+
+# ── 업종별 프리셋 단어 ───────────────────────────────────────
+INDUSTRY_PRESETS = {
+    "화장품/뷰티 (mirene)": [
+        "크림","세럼","에센스","앰플","토너","로션","마스크팩","선크림",
+        "클렌저","세라마이드","레티놀","히알루론산","콜라겐","나이아신아마이드",
+        "미백","보습","주름","탄력","모공","트러블","민감성","재생",
+        "닥터자르트","미렌","mirene","스킨케어","뷰티","화장품",
+    ],
+    "병원/의료 (라식·라섹·피부과)": [
+        "라식","라섹","스마일라식","안과","시력교정","드림렌즈",
+        "백내장","녹내장","노안","렌즈삽입술","ICL",
+        "보톡스","필러","리프팅","피부과","레이저","제모",
+        "성형","쌍꺼풀","코성형","지방흡입","지방이식",
+        "치과","임플란트","교정","브라켓","충치","스케일링",
+        "한의원","추나","도수치료","탈모","줄기세포",
+        "수술","시술","치료","검사","상담","비용","가격","잘하는",
+    ],
+    "건강기능식품": [
+        "유산균","프로바이오틱스","오메가3","비타민","홍삼","콜라겐",
+        "루테인","밀크씨슬","글루코사민","마그네슘","아연","철분",
+        "다이어트","체중감량","지방분해","디톡스","해독","클렌즈",
+        "면역","항산화","피로회복","관절","눈건강","장건강",
+        "효능","복용법","추천","부작용","먹는법",
+    ],
+    "패션/의류": [
+        "코디","스타일링","착장","OOTD","룩","패션",
+        "티셔츠","바지","원피스","자켓","코트","가방","신발",
+        "브랜드","무신사","지그재그","에이블리","29cm",
+        "사이즈","핏","후기","리뷰","구매후기",
+    ],
+    "직접입력": [],
+}
+
 def _shopping_keyword_score(kw):
-    """키워드 분석 기반 쇼핑 점수 (API 폴백)"""
+    """
+    쇼핑 전환 점수 계산 (최대 100점)
+    - 구매 전환 의도:     단어당 12점
+    - 제품 탐색 의도:     단어당 8점
+    - 업종/카테고리 단어: 단어당 6점
+    - 가격 관련:          단어당 5점
+    - 업종 프리셋/커스텀: 단어당 10점 (보너스)
+    - 키워드 길이 보너스
+    - 숫자 포함 보너스
+    """
+    import builtins
+    active_words = getattr(builtins, "_ACTIVE_SHOP_WORDS", [])
+
     score = 0
-    for word in SHOPPING_WORDS:
-        if word in kw:
-            score += 8
-    if len(kw) <= 5:   score += 10
-    elif len(kw) <= 8: score += 6
-    if any(c.isdigit() for c in kw): score += 5
-    return min(score, 40)
+
+    # 기본 가중치
+    for word in SHOP_BUY_WORDS:
+        if word in kw: score += 12
+    for word in SHOP_EXPLORE_WORDS:
+        if word in kw: score += 8
+    for word in SHOP_BEAUTY_WORDS:
+        if word in kw: score += 6
+    for word in SHOP_PRICE_WORDS:
+        if word in kw: score += 5
+
+    # 업종 프리셋/커스텀 단어 보너스
+    for word in active_words:
+        if word and word in kw:
+            score += 10
+
+    # 길이 보너스
+    if len(kw) <= 4:    score += 15
+    elif len(kw) <= 6:  score += 10
+    elif len(kw) <= 8:  score += 6
+    elif len(kw) <= 12: score += 3
+
+    # 숫자 포함
+    if any(c.isdigit() for c in kw): score += 8
+
+    return min(score, 100)
 
 def get_shopping_insight(keywords_batch, client_id, client_secret):
     """
@@ -579,13 +700,13 @@ def calculate_scores(keyword_data, claude_naver, claude_google,
         if keyword in google_set: g = min(g+8, 100)
 
         # 쇼핑 전환 점수
-        shop_score = min(int(shop_ratio*3),100) if shop_ratio is not None else None
+        shop_score = int(shop_ratio) if shop_ratio is not None else None
 
         # 추천 용도
         uses = []
         if min(n,100)>=60:                         uses.append("📝 네이버블로그")
         if min(g,100)>=60:                         uses.append("🔍 구글티스토리")
-        if shop_ratio is not None and shop_ratio>10: uses.append("🛒 쇼핑몰연결")
+        if shop_ratio is not None and shop_ratio>=30: uses.append("🛒 쇼핑몰연결")
         if trend in ("↑ 급상승","↗ 상승"):         uses.append("⚡ 트렌드")
         recommend = " / ".join(uses) if uses else "참고용"
 
@@ -617,7 +738,7 @@ def to_excel_bytes(rows):
     df_all    = pd.DataFrame(rows)
     df_naver  = df_all[df_all["네이버블로그_적합도"]>=60].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_google = df_all[df_all["구글티스토리_적합도"]>=60].sort_values("구글티스토리_적합도",ascending=False).reset_index(drop=True)
-    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=15)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
+    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=30)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
     df_trend  = df_all[df_all["트렌드(6개월)"].isin(["↑ 급상승","↗ 상승"])].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_full   = df_all.sort_values("월간검색(합계)",ascending=False).reset_index(drop=True)
 
@@ -679,6 +800,21 @@ if run_btn:
     if missing:
         st.error(f"⛔ 입력 필요: {', '.join(missing)}")
         st.stop()
+
+    # ── 업종 프리셋 + 커스텀 단어 적용
+    selected_industry = st.session_state.get("industry", "직접입력")
+    preset_words      = INDUSTRY_PRESETS.get(selected_industry, [])
+    custom_raw        = st.session_state.get("custom_words", "")
+    custom_words      = [w.strip() for w in custom_raw.replace("，",",").split(",") if w.strip()]
+    active_words      = list(dict.fromkeys(preset_words + custom_words))
+
+    # 전역 적용 (함수 내부에서 참조)
+    import builtins
+    builtins._ACTIVE_SHOP_WORDS = active_words
+
+    if active_words:
+        st.info(f"🏷️ **{selected_industry}** 적용 중 | 연관단어 총 {len(active_words)}개"
+                + (f" (직접추가 {len(custom_words)}개 포함)" if custom_words else ""))
 
     use_open = bool(naver_client_id and naver_client_secret)
     if not use_open:
@@ -776,7 +912,7 @@ if run_btn:
     # 요약
     n_rec = sum(1 for r in scored if r["네이버블로그_적합도"]>=60)
     g_rec = sum(1 for r in scored if r["구글티스토리_적합도"]>=60)
-    s_rec = sum(1 for r in scored if isinstance(r["쇼핑전환점수"],int) and r["쇼핑전환점수"]>=15)
+    s_rec = sum(1 for r in scored if isinstance(r["쇼핑전환점수"],int) and r["쇼핑전환점수"]>=30)
     t_rec = sum(1 for r in scored if r["트렌드(6개월)"] in ("↑ 급상승","↗ 상승"))
 
     c1,c2,c3,c4,c5 = st.columns(5)
@@ -790,7 +926,7 @@ if run_btn:
     df_all    = pd.DataFrame(scored)
     df_naver  = df_all[df_all["네이버블로그_적합도"]>=60].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
     df_google = df_all[df_all["구글티스토리_적합도"]>=60].sort_values("구글티스토리_적합도",ascending=False).reset_index(drop=True)
-    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=15)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
+    df_shop   = df_all[df_all["쇼핑전환점수"].apply(lambda x: isinstance(x,int) and x>=30)].sort_values("쇼핑전환점수",ascending=False).reset_index(drop=True)
     df_trend  = df_all[df_all["트렌드(6개월)"].isin(["↑ 급상승","↗ 상승"])].sort_values("네이버블로그_적합도",ascending=False).reset_index(drop=True)
 
     tab1,tab2,tab3,tab4,tab5 = st.tabs(["📝 네이버 블로그","🔍 구글/티스토리","🛒 쇼핑몰 연결","⚡ 트렌드 상승","📊 전체"])
