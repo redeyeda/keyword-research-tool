@@ -178,19 +178,23 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
-    # 키워드 정제 — 한글/영문/숫자/공백만 허용
+    # 키워드 정제 — 특수문자·제어문자만 제거
     clean_kw = []
     for k in keywords:
         if not k: continue
         k = str(k).strip()
-        k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
+        # 쉼표·제어문자 제거 후 공백 정리
+        k = re.sub(r"[\r\n\t]", " ", k)
         k = " ".join(k.split()).strip()
-        if len(k) >= 2 and k not in clean_kw:
+        # 최소 1자 이상
+        if len(k) >= 1 and k not in clean_kw:
             clean_kw.append(k)
 
     if not clean_kw:
         st.warning("유효한 키워드가 없습니다.")
         return []
+    
+    st.caption(f"📋 정제된 키워드 {len(clean_kw)}개로 조회 시작...")
 
     results    = []
     fail_count = 0
@@ -284,32 +288,44 @@ def get_google_suggest(keyword):
     return []
 
 def get_claude_longtail(main_keyword, api_key):
+    """Claude API 직접 호출 (requests) — 한글 인코딩 문제 방지"""
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        prompt = f"""당신은 한국 SEO 전문 마케터입니다.
-메인 키워드: "{main_keyword}"
-
-[네이버 블로그 최적화 키워드 20개]
-- 3단어 이상, 8자 이상, 정보탐색 의도
-- 추천/방법/후기/비교/효과/종류/가격/차이/순위 등 포함
-
-[구글/티스토리 최적화 키워드 20개]
-- 4단어 이상, 10자 이상, 질문형/정보형
-- 블로그가 공식사이트보다 상위 노출될 만한 롱테일
-
-반드시 JSON만:
-{{"naver_keywords":["키워드",...20개],"google_keywords":["키워드",...20개]}}"""
-        msg   = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt.encode("utf-8").decode("utf-8")}]
+        prompt = (
+            "당신은 한국 SEO 전문 마케터입니다.\n"
+            f"메인 키워드: \"{main_keyword}\"\n\n"
+            "[네이버 블로그 최적화 키워드 20개]\n"
+            "- 3단어 이상, 8자 이상, 정보탐색 의도\n"
+            "- 추천/방법/후기/비교/효과/종류/가격/차이/순위 등 포함\n\n"
+            "[구글/티스토리 최적화 키워드 20개]\n"
+            "- 4단어 이상, 10자 이상, 질문형/정보형\n"
+            "- 블로그가 공식사이트보다 상위 노출될 만한 롱테일\n\n"
+            "반드시 JSON만 응답하세요:\n"
+            '{"naver_keywords":["키워드",...20개],"google_keywords":["키워드",...20개]}'
         )
-        text  = msg.content[0].text
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            d = json.loads(match.group())
-            return d.get("naver_keywords", []), d.get("google_keywords", [])
+        payload = {
+            "model":      "claude-sonnet-4-20250514",
+            "max_tokens": 1500,
+            "messages":   [{"role": "user", "content": prompt}],
+        }
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         _clean_key(api_key),
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            timeout=30,
+        )
+        if r.status_code == 200:
+            resp_json = r.json()
+            text = resp_json.get("content", [{}])[0].get("text", "")
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if match:
+                d = json.loads(match.group())
+                return d.get("naver_keywords", []), d.get("google_keywords", [])
+        else:
+            st.warning(f"Claude API 오류[{r.status_code}]: {r.text[:200]}")
     except Exception as e:
         st.warning(f"Claude API 오류: {e}")
     return [], []
@@ -648,53 +664,11 @@ with col2:
     run_btn = st.button("🚀 분석 시작", use_container_width=True, type="primary")
 
 with st.expander("⚙️ 고급 옵션"):
-    top_n = st.slider("트렌드·쇼핑 API 호출 키워드 수 (상위 N개)", 10, 100, 50, 10)
+    top_n = st.slider("트렌드·쇼핑 API 호출 키워드 수 (상위 N개)", 5, 100, 50, 5)
     st.caption("검색량 상위 N개에만 블로그문서수·트렌드 API를 호출합니다. N을 높이면 미조회가 줄지만 속도가 느려집니다.")
 
 st.divider()
 
-# ── 쇼핑인사이트 API 진단 버튼
-with st.expander("🔬 쇼핑인사이트 API 진단 (문제 발생 시 사용)"):
-    diag_kw = st.text_input("테스트 키워드", value="콜라겐", key="diag_kw")
-    if st.button("📡 API 연결 테스트", key="diag_btn"):
-        if not naver_client_id or not naver_client_secret:
-            st.error("오픈API Client ID / Secret을 먼저 입력하세요.")
-        else:
-            cid     = _clean_key(naver_client_id)
-            csecret = _clean_key(naver_client_secret)
-            headers = {
-                "X-Naver-Client-Id":     cid,
-                "X-Naver-Client-Secret": csecret,
-                "Content-Type":          "application/json; charset=UTF-8",
-            }
-            end_d   = datetime.today()
-            start_d = end_d - timedelta(days=30)
-
-            endpoints = [
-                ("keywords/trend",       "https://openapi.naver.com/v1/datalab/shopping/keywords/trend",
-                 {"startDate": start_d.strftime("%Y-%m-%d"), "endDate": end_d.strftime("%Y-%m-%d"),
-                  "timeUnit": "month", "keyword": [{"name": diag_kw, "param": [diag_kw]}],
-                  "device": "", "ages": [], "gender": ""}),
-                ("categories/keywords",  "https://openapi.naver.com/v1/datalab/shopping/categories/keywords",
-                 {"startDate": start_d.strftime("%Y-%m-%d"), "endDate": end_d.strftime("%Y-%m-%d"),
-                  "timeUnit": "month", "category": "50000000", "keyword": [diag_kw],
-                  "device": "", "ages": [], "gender": ""}),
-                ("categories (분야별)",   "https://openapi.naver.com/v1/datalab/shopping/categories",
-                 {"startDate": start_d.strftime("%Y-%m-%d"), "endDate": end_d.strftime("%Y-%m-%d"),
-                  "timeUnit": "month",
-                  "categories": [{"name": "패션의류", "param": ["50000000"]}]}),
-            ]
-
-            for name, url, body in endpoints:
-                try:
-                    r = requests.post(url, headers=headers, json=body, timeout=15)
-                    if r.status_code == 200:
-                        st.success(f"✅ [{name}] 성공! → 이 엔드포인트 사용 가능")
-                        st.json(r.json())
-                    else:
-                        st.warning(f"❌ [{name}] 실패 [{r.status_code}]: {r.text[:300]}")
-                except Exception as e:
-                    st.error(f"❌ [{name}] 오류: {e}")
 
 if run_btn:
     missing = []
