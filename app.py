@@ -984,16 +984,34 @@ if run_btn:
             unique_stats.append(k)
     naver_stats = unique_stats
 
-    # ④ API 결과 관련성 필터 — 메인 키워드 첫 단어 필수 포함
+    # ④ API 결과 관련성 필터 — 항상 적용 (결과 없으면 없다고 표시)
     main_words_filter = [w for w in main_keyword.strip().split() if len(w) >= 2]
-    must_word_f = main_words_filter[0] if main_words_filter else ""
-    if must_word_f and len(naver_stats) > 10:
-        relevant = [k for k in naver_stats
-                   if must_word_f in k.get("relKeyword","")]
-        if len(relevant) >= 5:
-            removed_r = len(naver_stats) - len(relevant)
-            naver_stats = relevant
-            st.caption(f"🎯 관련성 필터: '{must_word_f}' 포함 {len(naver_stats)}개 / {removed_r}개 제거")
+    if main_words_filter:
+        # 1차: 메인 키워드 전체 포함
+        full_match = [k for k in naver_stats
+                     if main_keyword.strip().replace(" ","") in k.get("relKeyword","").replace(" ","")
+                     or main_keyword.strip() in k.get("relKeyword","")]
+        # 2차: 첫 단어 포함
+        first_match = [k for k in naver_stats
+                      if main_words_filter[0] in k.get("relKeyword","")]
+        # 3차: 어느 단어든 포함
+        any_match = [k for k in naver_stats
+                    if any(w in k.get("relKeyword","") for w in main_words_filter)]
+
+        if len(full_match) >= 3:
+            naver_stats = full_match
+            st.caption(f"🎯 완전일치 필터: {len(naver_stats)}개")
+        elif len(first_match) >= 3:
+            naver_stats = first_match
+            st.caption(f"🎯 첫단어 필터: {len(naver_stats)}개")
+        elif len(any_match) >= 3:
+            naver_stats = any_match
+            st.caption(f"🎯 연관어 필터: {len(naver_stats)}개")
+        else:
+            # 관련 결과 없음 — 빈 결과 반환 (무관한 것 표시 안 함)
+            st.warning(f"⚠️ '{main_keyword}' 관련 키워드가 네이버 DB에 거의 없습니다. "
+                      f"다른 키워드나 한글 표기(예: 피디알엔 크림)로 시도해보세요.")
+            naver_stats = []
 
     # 상위 N개 선별 (검색량 기준)
     sorted_stats = sorted(naver_stats, key=lambda k: _parse_count(k.get("monthlyPcQcCnt",0))+_parse_count(k.get("monthlyMobileQcCnt",0)), reverse=True)
