@@ -356,43 +356,49 @@ def get_google_suggest(keyword):
     return []
 
 def get_claude_longtail(main_keyword, api_key):
-    """Claude API — anthropic 라이브러리 사용 (인코딩 완전 위임)"""
+    """Claude API — ensure_ascii=True로 한글 유니코드 이스케이프 처리"""
     try:
-        import anthropic
         clean_key = _clean_key(api_key)
         if not clean_key:
             return [], []
 
-        client = anthropic.Anthropic(api_key=clean_key)
-
-        # 프롬프트: 영문 지시 + 한글 키워드 변수 분리
-        prompt = f"""You are a Korean SEO expert. Generate longtail keywords for the main keyword below.
-
-Main keyword: {main_keyword}
-
-Generate exactly 20 keywords for NAVER blog optimization:
-- Must contain the main keyword or its components
-- 8+ characters, informational intent (추천/방법/후기/비교/효과/순위 etc.)
-
-Generate exactly 20 keywords for Google/Tistory optimization:
-- Must contain the main keyword or its components  
-- 10+ characters, question/informational style
-
-Respond ONLY with valid JSON, no other text:
-{{"naver_keywords":["keyword1","keyword2",...20 total],"google_keywords":["keyword1","keyword2",...20 total]}}"""
-
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}]
+        prompt = (
+            "You are a Korean SEO expert.\n"
+            f"Main keyword: {main_keyword}\n\n"
+            "Generate exactly 20 Naver blog keywords (Korean, 8+ chars, informational).\n"
+            "Generate exactly 20 Google/Tistory keywords (Korean, 10+ chars, question type).\n"
+            "Keywords must be related to the main keyword.\n"
+            "Respond ONLY with JSON:\n"
+            '{"naver_keywords":["kw1",...20],"google_keywords":["kw1",...20]}'
         )
-        text  = message.content[0].text
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            d      = json.loads(match.group())
-            naver  = [_sanitize_keyword(k) for k in d.get("naver_keywords",  []) if k]
-            google = [_sanitize_keyword(k) for k in d.get("google_keywords", []) if k]
-            return [k for k in naver if len(k) >= 2], [k for k in google if len(k) >= 2]
+
+        # ensure_ascii=True: 한글 → \uXXXX 이스케이프 (ASCII만 사용)
+        payload_str = json.dumps({
+            "model":    "claude-sonnet-4-6",
+            "max_tokens": 1500,
+            "messages": [{"role": "user", "content": prompt}],
+        }, ensure_ascii=True)
+
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key":         clean_key,
+                "anthropic-version": "2023-06-01",
+                "content-type":      "application/json",
+            },
+            data=payload_str.encode("ascii"),
+            timeout=30,
+        )
+        if r.status_code == 200:
+            text  = r.json().get("content", [{}])[0].get("text", "")
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if match:
+                d      = json.loads(match.group())
+                naver  = [_sanitize_keyword(k) for k in d.get("naver_keywords",  []) if k]
+                google = [_sanitize_keyword(k) for k in d.get("google_keywords", []) if k]
+                return [k for k in naver if len(k) >= 2], [k for k in google if len(k) >= 2]
+        else:
+            st.warning(f"Claude API 오류[{r.status_code}]: {r.text[:200]}")
     except Exception as e:
         st.warning(f"Claude API 오류: {e}")
     return [], []
@@ -912,33 +918,9 @@ if run_btn:
         [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
     ))
 
-    # 메인 키워드에서 가장 핵심 단어 추출 (첫 번째 + 가장 긴 단어)
-    main_words_all = [w for w in main_keyword.strip().split() if len(w) >= 2]
-    # 핵심 단어: 첫 단어 + 3자 이상 단어들 (너무 엄격하지 않게)
-    core_words = []
-    if main_words_all:
-        core_words.append(main_words_all[0])   # 첫 단어는 항상 포함
-        for w in main_words_all[1:]:
-            if len(w) >= 3:
-                core_words.append(w)
-
-    # ② 힌트키워드 필터 — 핵심 단어 중 하나라도 포함 OR 20자 이하 단순 키워드
-    if core_words:
-        filtered_kw = [main_keyword.strip()]
-        for kw in raw_kw[1:]:
-            if any(w in kw for w in core_words):
-                filtered_kw.append(kw)
-            elif len(kw) <= 6 and not any(c in kw for c in "!@#$%"):
-                # 짧은 단순 키워드는 관련 있을 수 있으니 포함
-                filtered_kw.append(kw)
-        # 필터 후 30개 미만이면 원본 사용
-        all_kw = filtered_kw if len(filtered_kw) >= 30 else raw_kw
-    else:
-        all_kw = raw_kw
-
-    all_kw = list(dict.fromkeys(all_kw))  # 중복 제거
-    removed = len(raw_kw) - len(all_kw)
-    prog.progress(32, text=f"③ 키워드 필터링 완료 — {len(all_kw)}개 (비관련 {removed}개 제거)")
+    # 힌트키워드 — 중복만 제거 (필터 없이 전체 사용)
+    all_kw  = list(dict.fromkeys(raw_kw))
+    prog.progress(32, text=f"③ 키워드 통합 완료 — {len(all_kw)}개")
     log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.4초 = 약 {len(all_kw)*4//10}초 소요)")
 
     # ④ 광고 API (검색량·경쟁도)
