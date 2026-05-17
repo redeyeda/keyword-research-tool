@@ -323,7 +323,7 @@ def get_claude_longtail(main_keyword, api_key):
             '{"naver_keywords":["키워드",...20개],"google_keywords":["키워드",...20개]}'
         )
         payload = {
-            "model":      "claude-sonnet-4-20250514",
+            "model":      "claude-sonnet-4-6",
             "max_tokens": 1500,
             "messages":   [{"role": "user", "content": prompt}],
         }
