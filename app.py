@@ -943,27 +943,27 @@ if run_btn:
         [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
     ))
 
-    # ③ 힌트키워드 필터 — 메인 키워드 단어 포함된 것만 사용
-    main_words = [w for w in main_keyword.strip().split() if len(w) >= 2]
+    # ③ 힌트키워드 설계 — 메인 키워드 중심으로만 구성
+    main_kw_clean = main_keyword.strip()
+    main_words    = [w for w in main_kw_clean.split() if len(w) >= 2]
 
-    if main_words:
-        filtered = []
+    # 핵심 힌트 구성: 메인 키워드 자체 + 단어 분리
+    core_hints = [main_kw_clean]
+    for w in main_words:
+        if w not in core_hints:
+            core_hints.append(w)
+
+    # 자동완성/AI 결과 중 핵심단어 ALL 포함된 것만 추가
+    # (단어가 1개면 그 단어, 2개 이상이면 첫 번째 핵심단어 필수)
+    must_word = main_words[0] if main_words else ""
+    if must_word:
         for kw in raw_kw:
-            # 메인 키워드 단어 중 하나라도 포함되면 유지
-            if any(mw in kw for mw in main_words):
-                filtered.append(kw)
-        # 필터 후 20개 미만이면 메인 키워드 첫 단어로만 필터
-        if len(filtered) < 20:
-            first_word = main_words[0]
-            filtered = [kw for kw in raw_kw if first_word in kw]
-        # 그래도 적으면 원본 사용
-        all_kw = filtered if len(filtered) >= 10 else raw_kw
-    else:
-        all_kw = raw_kw
+            if kw not in core_hints and must_word in kw:
+                core_hints.append(kw)
 
-    all_kw = list(dict.fromkeys(all_kw))  # 중복 제거
+    all_kw  = list(dict.fromkeys(core_hints))
     removed = len(raw_kw) - len(all_kw)
-    prog.progress(32, text=f"③ 필터링 완료 — {len(all_kw)}개 (비관련 {removed}개 제거)")
+    prog.progress(32, text=f"③ 핵심 힌트키워드 — {len(all_kw)}개 ('{must_word}' 필수 포함)")
     log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.4초 = 약 {len(all_kw)*4//10}초 소요)")
 
     # ④ 광고 API (검색량·경쟁도)
@@ -984,15 +984,16 @@ if run_btn:
             unique_stats.append(k)
     naver_stats = unique_stats
 
-    # ④ API 결과 관련성 필터링 — 메인 키워드 단어 포함 여부
+    # ④ API 결과 관련성 필터 — 메인 키워드 첫 단어 필수 포함
     main_words_filter = [w for w in main_keyword.strip().split() if len(w) >= 2]
-    if main_words_filter and len(naver_stats) > 20:
+    must_word_f = main_words_filter[0] if main_words_filter else ""
+    if must_word_f and len(naver_stats) > 10:
         relevant = [k for k in naver_stats
-                   if any(w in k.get("relKeyword","") for w in main_words_filter)]
-        if len(relevant) >= 15:
+                   if must_word_f in k.get("relKeyword","")]
+        if len(relevant) >= 5:
             removed_r = len(naver_stats) - len(relevant)
             naver_stats = relevant
-            st.caption(f"🎯 관련성 필터: {len(naver_stats)}개 유지 / 비관련 {removed_r}개 제거")
+            st.caption(f"🎯 관련성 필터: '{must_word_f}' 포함 {len(naver_stats)}개 / {removed_r}개 제거")
 
     # 상위 N개 선별 (검색량 기준)
     sorted_stats = sorted(naver_stats, key=lambda k: _parse_count(k.get("monthlyPcQcCnt",0))+_parse_count(k.get("monthlyMobileQcCnt",0)), reverse=True)
