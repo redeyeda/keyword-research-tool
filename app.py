@@ -57,10 +57,13 @@ def load_config():
 
 def save_config(data: dict):
     try:
+        # 저장 전 모든 값 정제
+        clean_data = {k: str(v).strip() for k, v in data.items() if not k.startswith("_")}
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(clean_data, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
+        st.error(f"저장 실패: {e}")
         return False
 
 # ──────────────────────────────────────────────────────────────
@@ -401,9 +404,9 @@ def get_claude_longtail(main_keyword, api_key):
             headers={
                 "x-api-key":         _clean_key(api_key),
                 "anthropic-version": "2023-06-01",
-                "content-type":      "application/json",
+                "content-type":      "application/json; charset=utf-8",
             },
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            json=payload,
             timeout=30,
         )
         if r.status_code == 200:
