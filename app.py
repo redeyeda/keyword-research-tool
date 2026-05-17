@@ -92,9 +92,9 @@ with st.sidebar:
 
     st.markdown('<div class="api-group">', unsafe_allow_html=True)
     st.markdown("**📊 네이버 검색광고 API**")
-    naver_api_key     = st.text_input("ACCESS_LICENSE", value=cfg.get("naver_api_key",""),     type="password", key="ad_key")
-    naver_secret_key  = st.text_input("SECRET_KEY",     value=cfg.get("naver_secret_key",""),  type="password", key="ad_secret")
-    naver_customer_id = st.text_input("CUSTOMER_ID",    value=cfg.get("naver_customer_id",""), type="password", key="ad_cid")
+    naver_api_key     = st.text_input("ACCESS_LICENSE", value=cfg.get("naver_api_key","").strip(),     type="password", key="ad_key")
+    naver_secret_key  = st.text_input("SECRET_KEY",     value=cfg.get("naver_secret_key","").strip(),  type="password", key="ad_secret")
+    naver_customer_id = st.text_input("CUSTOMER_ID",    value=cfg.get("naver_customer_id","").strip(), type="password", key="ad_cid")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="api-group">', unsafe_allow_html=True)
@@ -193,18 +193,25 @@ def _ad_sig(secret_key, timestamp, method, path):
     return base64.b64encode(h.digest()).decode()
 
 def _clean_key(val):
-    """API 키에서 공백·줄바꿈·따옴표 제거"""
+    """API 키에서 공백·줄바꿈·따옴표·개행 완전 제거"""
     if not val: return ""
-    return str(val).strip().strip('"').strip("'").strip()
+    v = str(val)
+    # 모든 공백류 문자 제거
+    v = v.replace("\n","").replace("\r","").replace("\t","").replace(" ","")
+    # 앞뒤 따옴표 제거
+    v = v.strip('"').strip("'").strip()
+    return v
 
 def _make_ad_headers(api_key, secret_key, cid, path):
     """매 요청마다 새 타임스탬프와 서명 생성"""
-    ts = str(int(time.time() * 1000))
+    ts      = str(int(time.time() * 1000))
+    api_key = _clean_key(api_key)
+    sec_key = _clean_key(secret_key)
     return {
         "X-Timestamp": ts,
-        "X-API-KEY":   _clean_key(api_key),
-        "X-Customer":  cid,
-        "X-Signature": _ad_sig(_clean_key(secret_key), ts, "GET", path),
+        "X-API-KEY":   api_key,
+        "X-Customer":  str(cid).strip(),
+        "X-Signature": _ad_sig(sec_key, ts, "GET", path),
     }
 
 def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
