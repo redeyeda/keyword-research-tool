@@ -7,6 +7,7 @@
 
 import streamlit as st
 import requests
+import urllib.parse
 import hashlib
 import hmac
 import base64
@@ -105,7 +106,17 @@ with st.sidebar:
 
     st.markdown('<div class="api-group">', unsafe_allow_html=True)
     st.markdown("**🤖 Claude API**")
-    claude_api_key = st.text_input("API Key (sk-ant-...)", value=cfg.get("claude_api_key",""), type="password", key="claude_key")
+    # Secrets 또는 config.json에서 자동 로드
+    saved_claude = cfg.get("claude_api_key", "")
+    claude_api_key = st.text_input(
+        "API Key (sk-ant-...)",
+        value=saved_claude,
+        type="password",
+        key="claude_key",
+        help="저장 버튼 클릭 시 로컬 config.json에 저장됩니다."
+    )
+    if saved_claude:
+        st.caption("✅ 저장된 Claude 키 자동 로드됨")
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── 저장 버튼 (로컬 전용 / 클라우드는 Secrets 사용)
@@ -227,14 +238,13 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     prog_txt   = st.empty()
 
     def _call_api(kw_list):
-        """키워드 리스트로 API 호출, (status_code, data) 반환"""
+        """키워드 리스트로 API 호출 — URL 직접 조립 (쉼표 인코딩 방지)"""
         hdrs = _make_ad_headers(api_key, secret_key, cid, path)
         try:
-            r = requests.get(
-                BASE + path, headers=hdrs,
-                params={"hintKeywords": ",".join(kw_list), "showDetail": "1"},
-                timeout=15,
-            )
+            # 쉼표가 %2C로 인코딩되지 않도록 URL 직접 조립
+            kw_str  = urllib.parse.quote(",".join(kw_list), safe=",")
+            url     = f"{BASE}{path}?hintKeywords={kw_str}&showDetail=1"
+            r = requests.get(url, headers=hdrs, timeout=15)
             return r.status_code, r
         except Exception as e:
             return 0, None
