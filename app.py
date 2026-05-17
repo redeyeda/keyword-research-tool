@@ -218,9 +218,20 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
 
     results    = []
     fail_count = 0
+    total_kw   = len(clean_kw)
+
+    # 진행 상태 표시용 컨테이너
+    prog_bar = st.progress(0)
+    prog_txt = st.empty()
 
     for idx, kw in enumerate(clean_kw):
-        fetched = False
+        fetched   = False
+        wait_time = 0.5  # 기본 대기 시간
+
+        # 진행률 업데이트
+        pct = int((idx + 1) / total_kw * 100)
+        prog_bar.progress(pct)
+        prog_txt.caption(f"🔍 광고API 조회 중... {idx+1}/{total_kw}개 | 성공 {len(results)}건 | 실패 {fail_count}건")
 
         for attempt in range(3):   # 최대 3회 시도
             hdrs = _make_ad_headers(api_key, secret_key, cid, path)
@@ -235,31 +246,40 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
                     fetched = True
                     break
                 elif r.status_code == 400:
-                    # 파라미터 오류 — 이 키워드 스킵 (재시도 불필요)
+                    # 파라미터 오류 — 스킵
                     break
                 elif r.status_code == 403:
-                    # 인증 오류 — 전체 중단
                     st.error(f"네이버 광고API 인증 실패[403]: {r.text[:200]}")
+                    prog_bar.empty()
+                    prog_txt.empty()
                     return results if results else []
-                else:
-                    # 일시 오류 — 재시도
-                    time.sleep(1.0)
+                elif r.status_code == 429:
+                    # 과호출 — 지수 백오프
+                    wait_time = 2.0 * (attempt + 1)
+                    prog_txt.caption(f"⏳ API 과호출 감지, {wait_time:.0f}초 대기 후 재시도...")
+                    time.sleep(wait_time)
                     continue
-            except Exception as e:
-                time.sleep(1.0)
+                else:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+            except Exception:
+                time.sleep(1.0 * (attempt + 1))
                 continue
 
         if not fetched:
             fail_count += 1
 
-        # 호출 간격 (과부하 방지)
-        time.sleep(0.25)
+        # 호출 간격 — 0.5초 (과부하 방지 강화)
+        time.sleep(0.5)
+
+    prog_bar.empty()
+    prog_txt.empty()
 
     if fail_count > 0:
         if len(results) > 0:
             st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
         else:
-            st.error("모든 키워드 조회 실패. 30초 후 다시 시도해주세요.")
+            st.error("모든 키워드 조회 실패. 30초 후 다시 시도하거나 API 키를 확인하세요.")
 
     return results
 
@@ -822,40 +842,53 @@ if run_btn:
     if not use_open:
         st.info("ℹ️ 오픈API 키 미입력 → 블로그 문서수·트렌드·쇼핑 분석을 건너뜁니다.")
 
+    # 전체 단계 안내
+    steps_box = st.container()
+    with steps_box:
+        st.markdown("""
+        | 단계 | 내용 | 예상시간 |
+        |------|------|---------|
+        | ① | 네이버·구글 자동완성 수집 | 5초 |
+        | ② | Claude AI 롱테일 생성 | 10초 |
+        | ③ | 네이버 검색량·경쟁도 조회 | 30~60초 |
+        | ④ | 블로그 문서수·트렌드 조회 | 20~40초 |
+        | ⑤ | 점수 계산 및 엑셀 생성 | 5초 |
+        """)
+
     prog = st.progress(0, text="분석 준비 중...")
     log  = st.empty()
 
     # ① 자동완성
     log.info("① 네이버 연관 키워드 수집 중...")
     naver_sug = get_naver_suggest(main_keyword.strip())
-    prog.progress(10, text=f"네이버 자동완성 {len(naver_sug)}개")
+    prog.progress(8, text=f"① 완료 — 네이버 자동완성 {len(naver_sug)}개 수집")
 
     log.info("② 구글 연관 키워드 수집 중...")
     google_sug = get_google_suggest(main_keyword.strip())
-    prog.progress(18, text=f"구글 자동완성 {len(google_sug)}개")
+    prog.progress(15, text=f"① 완료 — 구글 자동완성 {len(google_sug)}개 수집")
 
     # ② Claude 롱테일
-    log.info("③ Claude AI 롱테일 생성 중...")
+    log.info("③ Claude AI 롱테일 생성 중... (약 10초)")
     claude_naver, claude_google = [], []
     if claude_api_key:
         claude_naver, claude_google = get_claude_longtail(main_keyword.strip(), claude_api_key)
         if claude_naver or claude_google:
-            prog.progress(30, text=f"AI 롱테일 네이버 {len(claude_naver)}개 / 구글 {len(claude_google)}개")
+            prog.progress(28, text=f"② 완료 — AI 롱테일 {len(claude_naver)+len(claude_google)}개 생성")
         else:
-            prog.progress(30, text="AI 롱테일 생성 실패 (크레딧 확인) → 자동완성 키워드로 진행")
+            prog.progress(28, text="② Claude 생성 실패 → 자동완성 키워드로 진행")
     else:
-        prog.progress(30, text="Claude API 키 없음 → 자동완성 키워드로 진행")
+        prog.progress(28, text="② Claude API 키 없음 → 자동완성으로 진행")
 
     # ③ 통합
     all_kw = list(dict.fromkeys(
         [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
     ))
-    prog.progress(35, text=f"키워드 통합 {len(all_kw)}개 (중복제거)")
+    prog.progress(32, text=f"③ 키워드 통합 완료 — 총 {len(all_kw)}개 (중복제거)")
+    log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.5초 = 약 {len(all_kw)//2}초 소요)")
 
     # ④ 광고 API (검색량·경쟁도)
-    log.info("④ 네이버 검색량 & 광고 경쟁도 조회 중...")
     naver_stats = get_naver_keyword_stats(all_kw, naver_api_key, naver_secret_key, naver_customer_id)
-    prog.progress(55, text=f"광고API {len(naver_stats)}개 완료")
+    prog.progress(60, text=f"④ 완료 — 검색량 데이터 {len(naver_stats)}개 수집")
 
     if not naver_stats:
         st.error("⛔ 네이버 광고API 데이터가 없습니다. 30초 후 다시 시도하거나 API 키를 확인하세요.")
