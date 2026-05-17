@@ -227,12 +227,17 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
-    # 키워드 정제 — 네이버 API 유효성 기준 적용
+    # 키워드 정제 — 네이버 API 유효성 기준 (엄격)
     def _is_valid_hint(kw):
+        """네이버 hintKeywords 유효성 검사"""
         if not kw or len(kw) < 2: return False
-        # 한글 2자 이상 포함 → 유효
-        if len(re.sub(r"[^가-힣]", "", kw)) >= 2: return True
-        # 영문만 + 공백없음 + 2자 이상 → 유효
+        # 공백 있는 키워드: 모든 단어가 한글(2자이상)이어야 함
+        if " " in kw:
+            words = kw.split()
+            return all(len(re.sub(r"[^가-힣]", "", w)) >= 2 for w in words)
+        # 공백 없는 키워드: 한글 2자 이상 OR 영문만 2자 이상
+        korean = re.sub(r"[^가-힣]", "", kw)
+        if len(korean) >= 2: return True
         if re.match(r"^[a-zA-Z0-9]{2,}$", kw): return True
         return False
 
@@ -246,11 +251,12 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         if _is_valid_hint(k):
             if k not in clean_kw:
                 clean_kw.append(k)
-        elif " " in k:
-            # 혼합/복합 키워드 → 한글 단어만 분리해서 추가
+        else:
+            # 유효하지 않으면 단어 분리 후 한글 단어만 추가
             for word in k.split():
-                if _is_valid_hint(word) and word not in clean_kw:
-                    clean_kw.append(word)
+                if word and len(re.sub(r"[^가-힣]", "", word)) >= 2:
+                    if word not in clean_kw:
+                        clean_kw.append(word)
 
 
     if not clean_kw:
