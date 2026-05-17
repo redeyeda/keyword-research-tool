@@ -401,44 +401,55 @@ def get_google_suggest(keyword):
     return []
 
 def get_claude_longtail(main_keyword, api_key):
-    """Claude API 직접 호출 (requests) — 한글 인코딩 문제 방지"""
+    """Claude API 호출 — httpx 방식으로 UTF-8 인코딩 보장"""
     try:
+        # 프롬프트를 bytes로 직접 인코딩해서 전송
         prompt = (
-            "당신은 한국 SEO 전문 마케터입니다.\n"
-            f"메인 키워드: \"{main_keyword}\"\n\n"
-            "[네이버 블로그 최적화 키워드 20개]\n"
-            "- 3단어 이상, 8자 이상, 정보탐색 의도\n"
-            "- 추천/방법/후기/비교/효과/종류/가격/차이/순위 등 포함\n\n"
-            "[구글/티스토리 최적화 키워드 20개]\n"
-            "- 4단어 이상, 10자 이상, 질문형/정보형\n"
-            "- 블로그가 공식사이트보다 상위 노출될 만한 롱테일\n\n"
-            "반드시 JSON만 응답하세요:\n"
-            '{"naver_keywords":["키워드",...20개],"google_keywords":["키워드",...20개]}'
+            "You are a Korean SEO expert.\n"
+            f"Main keyword: {main_keyword}\n\n"
+            "Generate longtail keywords in Korean.\n\n"
+            "[Naver blog optimized - 20 keywords]\n"
+            "- 3+ words, 8+ chars, informational intent\n"
+            "- Include: 추천/방법/후기/비교/효과/종류/가격/차이/순위\n\n"
+            "[Google/Tistory optimized - 20 keywords]\n"
+            "- 4+ words, 10+ chars, question/informational\n"
+            "- Longtail phrases where blogs rank above official sites\n\n"
+            "Respond ONLY with JSON, no other text:\n"
+            '{"naver_keywords":["keyword1",...20],"google_keywords":["keyword1",...20]}'
         )
-        payload = {
-            "model":      "claude-sonnet-4-6",
+        payload_bytes = json.dumps({
+            "model":    "claude-sonnet-4-6",
             "max_tokens": 1500,
-            "messages":   [{"role": "user", "content": prompt}],
-        }
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
+            "messages": [{"role": "user", "content": prompt}],
+        }, ensure_ascii=False).encode("utf-8")
+
+        import http.client, ssl
+        conn = http.client.HTTPSConnection("api.anthropic.com", context=ssl.create_default_context())
+        conn.request(
+            "POST", "/v1/messages",
+            body=payload_bytes,
             headers={
                 "x-api-key":         _clean_key(api_key),
                 "anthropic-version": "2023-06-01",
-                "content-type":      "application/json; charset=utf-8",
-            },
-            json=payload,
-            timeout=30,
+                "content-type":      "application/json",
+                "accept":            "application/json",
+            }
         )
-        if r.status_code == 200:
-            resp_json = r.json()
-            text = resp_json.get("content", [{}])[0].get("text", "")
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8")
+        conn.close()
+
+        if resp.status == 200:
+            data  = json.loads(body)
+            text  = data.get("content", [{}])[0].get("text", "")
             match = re.search(r"\{.*\}", text, re.DOTALL)
             if match:
                 d = json.loads(match.group())
-                return d.get("naver_keywords", []), d.get("google_keywords", [])
+                naver  = [_sanitize_keyword(k) for k in d.get("naver_keywords", []) if k]
+                google = [_sanitize_keyword(k) for k in d.get("google_keywords", []) if k]
+                return [k for k in naver if k], [k for k in google if k]
         else:
-            st.warning(f"Claude API 오류[{r.status_code}]: {r.text[:200]}")
+            st.warning(f"Claude API 오류[{resp.status}]: {body[:200]}")
     except Exception as e:
         st.warning(f"Claude API 오류: {e}")
     return [], []
