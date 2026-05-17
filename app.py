@@ -248,13 +248,15 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     prog_txt   = st.empty()
 
     def _call_api(kw_list):
-        """키워드 리스트로 API 호출 — URL 직접 조립 (쉼표 인코딩 방지)"""
+        """키워드 리스트로 API 호출 — params 방식 (requests가 올바르게 인코딩)"""
         hdrs = _make_ad_headers(api_key, secret_key, cid, path)
         try:
-            # 쉼표가 %2C로 인코딩되지 않도록 URL 직접 조립
-            kw_str  = urllib.parse.quote(",".join(kw_list), safe=",")
-            url     = f"{BASE}{path}?hintKeywords={kw_str}&showDetail=1"
-            r = requests.get(url, headers=hdrs, timeout=15)
+            r = requests.get(
+                BASE + path,
+                headers=hdrs,
+                params={"hintKeywords": ",".join(kw_list), "showDetail": "1"},
+                timeout=15,
+            )
             return r.status_code, r
         except Exception as e:
             return 0, None
@@ -292,19 +294,38 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
                     prog_bar.empty(); prog_txt.empty()
                     return results if results else []
                 elif s2 == 400:
-                    # 개별도 400 → 첫 번째 실패만 화면에 표시
-                    if fail_count == 0:
-                        st.warning(f"⚠️ 키워드 [{single_kw}] 조회실패[400]: {r2.text[:200] if r2 else ''}")
-                    fail_count += 1
+                    # 단어 단위로 분리해서 재시도 (다중 단어 키워드 처리)
+                    words = single_kw.split()
+                    sub_ok = False
+                    for word in words:
+                        if len(word) < 2: continue
+                        s3, r3 = _call_api([word])
+                        if s3 == 200:
+                            results.extend(r3.json().get("keywordList", []))
+                            sub_ok = True
+                        time.sleep(0.3)
+                    if not sub_ok:
+                        fail_count += 1
                 elif s2 == 0:
-                    st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근 차단 가능성")
+                    st.error("❌ 네트워크 연결 오류")
                     prog_bar.empty(); prog_txt.empty()
                     return results if results else []
                 else:
-                    if fail_count == 0:
-                        st.warning(f"⚠️ 예상치 못한 오류[{s2}]: {r2.text[:200] if r2 else ''}")
                     fail_count += 1
                 time.sleep(0.4)
+        elif status == 400 and len(batch) == 1:
+            # 단어 분리 재시도
+            words = batch[0].split()
+            sub_ok = False
+            for word in words:
+                if len(word) < 2: continue
+                s2, r2 = _call_api([word])
+                if s2 == 200:
+                    results.extend(r2.json().get("keywordList", []))
+                    sub_ok = True
+                time.sleep(0.3)
+            if not sub_ok:
+                fail_count += 1
 
         elif status == 0:
             st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근이 차단되었을 수 있습니다.")
