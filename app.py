@@ -206,7 +206,7 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
-    # 키워드 정제 — 한글·영문·숫자·공백만 허용 (네이버 API 안전)
+    # 키워드 정제 — 한글·영문·숫자·공백만 허용
     clean_kw = []
     for k in keywords:
         if not k: continue
@@ -220,103 +220,80 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.warning("유효한 키워드가 없습니다.")
         return []
 
-    # 사전 테스트 — 공백 없는 단순 키워드로 연결 확인
-    test_kw   = clean_kw[0].split()[0]   # 첫 단어만 사용 (공백 없음)
-    test_hdrs = _make_ad_headers(api_key, secret_key, cid, path)
-    try:
-        test_r = requests.get(
-            BASE + path, headers=test_hdrs,
-            params={"hintKeywords": test_kw, "showDetail": "1"},
-            timeout=15,
-        )
-        if test_r.status_code == 403:
-            st.error(f"API 인증 실패[403] — API 키를 확인하세요: {test_r.text[:200]}")
-            return []
-        elif test_r.status_code == 429:
-            st.error("API 호출 한도 초과[429] — 잠시 후 다시 시도하세요.")
-            return []
-        elif test_r.status_code == 200:
-            first_results = test_r.json().get("keywordList", [])
-        elif test_r.status_code == 400:
-            # 400이면 키워드 문제 — 빈 결과로 계속 진행
-            first_results = []
-        else:
-            st.error(f"API 오류[{test_r.status_code}] — {test_r.text[:200]}")
-            return []
-    except Exception as e:
-        st.error(f"API 연결 오류: {e}")
-        return []
-
-    st.caption(f"📋 API 연결 확인 완료 — {len(clean_kw)}개 키워드 조회 시작...")
-    results    = first_results[:]
-    fail_count = 0
-    start_idx  = 0   # 전체 키워드 처음부터 처리
-
-
+    total_kw   = len(clean_kw)
     results    = []
     fail_count = 0
-    total_kw   = len(clean_kw)
+    prog_bar   = st.progress(0)
+    prog_txt   = st.empty()
 
-    # 진행 상태 표시용 컨테이너
-    prog_bar = st.progress(0)
-    prog_txt = st.empty()
+    def _call_api(kw_list):
+        """키워드 리스트로 API 호출, (status_code, data) 반환"""
+        hdrs = _make_ad_headers(api_key, secret_key, cid, path)
+        try:
+            r = requests.get(
+                BASE + path, headers=hdrs,
+                params={"hintKeywords": ",".join(kw_list), "showDetail": "1"},
+                timeout=15,
+            )
+            return r.status_code, r
+        except Exception as e:
+            return 0, None
 
-    for idx, kw in enumerate(clean_kw[start_idx:], start=start_idx):
-        fetched   = False
-        wait_time = 0.5  # 기본 대기 시간
+    processed = 0
+    i = 0
+    while i < total_kw:
+        # 5개씩 배치 처리
+        batch = clean_kw[i:i+5]
+        status, r = _call_api(batch)
 
-        # 진행률 업데이트
-        pct = int((idx + 1) / total_kw * 100)
-        prog_bar.progress(pct)
-        prog_txt.caption(f"🔍 광고API 조회 중... {idx+1}/{total_kw}개 | 성공 {len(results)}건 | 실패 {fail_count}건")
+        if status == 200:
+            results.extend(r.json().get("keywordList", []))
+            processed += len(batch)
 
-        for attempt in range(3):   # 최대 3회 시도
-            hdrs = _make_ad_headers(api_key, secret_key, cid, path)
-            try:
-                r = requests.get(
-                    BASE + path, headers=hdrs,
-                    params={"hintKeywords": kw, "showDetail": "1"},
-                    timeout=15,
-                )
-                if r.status_code == 200:
-                    results.extend(r.json().get("keywordList", []))
-                    fetched = True
-                    break
-                elif r.status_code == 400:
-                    # 파라미터 오류 — 스킵
-                    break
-                elif r.status_code == 403:
-                    st.error(f"네이버 광고API 인증 실패[403]: {r.text[:200]}")
-                    prog_bar.empty()
-                    prog_txt.empty()
+        elif status == 403:
+            st.error(f"API 인증 실패[403] — API 키를 확인하세요.")
+            prog_bar.empty(); prog_txt.empty()
+            return results if results else []
+
+        elif status == 429:
+            prog_txt.caption("⏳ API 과호출 — 3초 대기 후 재시도...")
+            time.sleep(3.0)
+            continue  # 같은 배치 재시도
+
+        elif status == 400 and len(batch) > 1:
+            # 배치 실패 → 개별 처리로 폴백
+            for single_kw in batch:
+                s2, r2 = _call_api([single_kw])
+                if s2 == 200:
+                    results.extend(r2.json().get("keywordList", []))
+                    processed += 1
+                elif s2 == 403:
+                    st.error("API 인증 실패[403]")
+                    prog_bar.empty(); prog_txt.empty()
                     return results if results else []
-                elif r.status_code == 429:
-                    # 과호출 — 지수 백오프
-                    wait_time = 2.0 * (attempt + 1)
-                    prog_txt.caption(f"⏳ API 과호출 감지, {wait_time:.0f}초 대기 후 재시도...")
-                    time.sleep(wait_time)
-                    continue
                 else:
-                    time.sleep(1.0 * (attempt + 1))
-                    continue
-            except Exception:
-                time.sleep(1.0 * (attempt + 1))
-                continue
+                    fail_count += 1
+                time.sleep(0.4)
 
-        if not fetched:
-            fail_count += 1
+        else:
+            fail_count += len(batch)
 
-        # 호출 간격 — 0.5초 (과부하 방지 강화)
-        time.sleep(0.5)
+        i += 5
+        pct = min(int(i / total_kw * 100), 100)
+        prog_bar.progress(pct)
+        prog_txt.caption(
+            f"🔍 광고API 조회 중... {min(i, total_kw)}/{total_kw}개 "
+            f"| ✅ 성공 {len(results)}건 | ❌ 실패 {fail_count}건"
+        )
+        time.sleep(0.4)
 
     prog_bar.empty()
     prog_txt.empty()
 
-    if fail_count > 0:
-        if len(results) > 0:
-            st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
-        else:
-            st.error("모든 키워드 조회 실패. 30초 후 다시 시도하거나 API 키를 확인하세요.")
+    if fail_count > 0 and len(results) > 0:
+        st.warning(f"일부 키워드 조회 실패: {fail_count}건 / 성공: {len(results)}건")
+    elif len(results) == 0:
+        st.error("모든 키워드 조회 실패. 30초 후 다시 시도하거나 API 키를 확인하세요.")
 
     return results
 
