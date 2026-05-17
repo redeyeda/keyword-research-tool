@@ -290,6 +290,9 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             prog_bar.empty(); prog_txt.empty()
             return results if results else []
         else:
+            # 첫 번째 실패 시 상세 오류 표시
+            if fail_count == 0 and r is not None:
+                st.warning(f"⚠️ 첫 실패 키워드: [{kw}] / 상태: {status} / 응답: {r.text[:300]}")
             fail_count += 1
 
         pct = min(int((i + 1) / total_kw * 100), 100)
