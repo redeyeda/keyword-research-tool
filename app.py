@@ -217,6 +217,58 @@ def _make_ad_headers(api_key, secret_key, cid, path):
         "X-Signature": _ad_sig(sec_key, ts, "GET", path),
     }
 
+def verify_keywords_volume(keywords, api_key, secret_key, customer_id):
+    """
+    3단계: 키워드 검색량 검증
+    수집된 키워드를 네이버 광고 API에 단일 조회
+    → 실제 검색량 있는 키워드만 반환
+    """
+    BASE = "https://api.searchad.naver.com"
+    path = "/keywordstool"
+
+    cid = re.sub(r"[^0-9]", "", str(customer_id).strip())
+    if not cid:
+        return []
+
+    def _is_valid(kw):
+        if not kw or len(kw) < 2: return False
+        if " " in kw: return False
+        korean = re.sub(r"[^가-힣]", "", kw)
+        if len(korean) >= 2: return True
+        if re.match(r"^[a-zA-Z0-9]{2,}$", kw): return True
+        return False
+
+    # 공백 제거 후 단어별 변환
+    query_kws = []
+    for kw in keywords:
+        kw_clean = kw.strip()
+        if _is_valid(kw_clean):
+            query_kws.append(kw_clean)
+        else:
+            # 공백 포함이면 각 단어 개별 추가
+            for w in kw_clean.split():
+                if _is_valid(w) and w not in query_kws:
+                    query_kws.append(w)
+
+    query_kws = list(dict.fromkeys(query_kws))
+    results   = []
+
+    for kw in query_kws:
+        hdrs = _make_ad_headers(api_key, secret_key, cid, path)
+        try:
+            r = requests.get(
+                BASE + path, headers=hdrs,
+                params={"hintKeywords": kw, "showDetail": "1"},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                results.extend(r.json().get("keywordList", []))
+        except:
+            pass
+        time.sleep(0.3)
+
+    return results
+
 def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     BASE = "https://api.searchad.naver.com"
     path = "/keywordstool"
@@ -337,6 +389,43 @@ def _sanitize_keyword(k):
     k = " ".join(k.split()).strip()
     return k if len(k) >= 2 else ""
 
+def get_naver_suggest_multi(keyword):
+    """
+    네이버 자동완성 다중 확장
+    메인 키워드 + 조합어로 여러 번 자동완성 조회
+    → 실제 검색 패턴 기반 롱테일 수집
+    """
+    # 검색 의도 조합어
+    intent_words = [
+        "", "추천", "효과", "방법", "후기", "순위", "비교",
+        "가격", "부작용", "사용법", "종류", "성분", "차이"
+    ]
+    all_suggestions = []
+    base = keyword.strip()
+
+    for intent in intent_words[:8]:  # 과도한 API 호출 방지
+        query = f"{base} {intent}".strip() if intent else base
+        try:
+            r = requests.get(
+                "https://ac.search.naver.com/nx/ac",
+                params={"q": query, "con": "1", "frm": "nv", "ans": "2",
+                        "r_format": "json", "r_enc": "UTF-8",
+                        "l_enc": "UTF-8", "st": "100"},
+                timeout=5,
+            )
+            if r.status_code == 200:
+                for group in r.json().get("items", []):
+                    for item in group:
+                        if item and isinstance(item, list) and item[0]:
+                            kw = item[0].strip()
+                            if kw and kw not in all_suggestions:
+                                all_suggestions.append(kw)
+        except:
+            pass
+        time.sleep(0.1)
+
+    return all_suggestions[:100]
+
 def get_naver_suggest(keyword):
     try:
         r = requests.get("https://ac.search.naver.com/nx/ac",
@@ -372,28 +461,39 @@ def get_google_suggest(keyword):
     except: pass
     return []
 
-def get_claude_longtail(main_keyword, api_key):
-    """Claude API — ensure_ascii=True로 한글 유니코드 이스케이프 처리"""
+def get_claude_longtail(main_keyword, api_key, naver_samples=None, google_samples=None):
+    """
+    Claude API — 실제 자동완성 패턴 기반으로 롱테일 확장
+    naver_samples, google_samples: 1단계에서 수집한 실제 검색어 샘플
+    """
     try:
         clean_key = _clean_key(api_key)
         if not clean_key:
             return [], []
 
+        # 실제 검색 패턴 샘플 포함
+        naver_sample_str  = ", ".join((naver_samples  or [])[:10])
+        google_sample_str = ", ".join((google_samples or [])[:10])
+
         prompt = (
-            "You are a Korean SEO expert.\n"
-            f"Main keyword: {main_keyword}\n\n"
-            "Generate exactly 20 Naver blog keywords (Korean, 8+ chars, informational).\n"
-            "Generate exactly 20 Google/Tistory keywords (Korean, 10+ chars, question type).\n"
-            "Keywords must be related to the main keyword.\n"
+            f"Main keyword: {main_keyword}\n"
+            f"Real Naver search patterns found: {naver_sample_str}\n"
+            f"Real Google search patterns found: {google_sample_str}\n\n"
+            "Based on these REAL search patterns, generate more similar longtail keywords.\n"
+            "Rules:\n"
+            "- Must be similar style to the real patterns above\n"
+            "- Must contain the main keyword or its components\n"
+            "- Naver: 30 keywords, informational intent (추천/후기/방법/효과/순위/비교)\n"
+            "- Google: 30 keywords, question/informational style, longer phrases\n"
+            "- All keywords in Korean\n"
             "Respond ONLY with JSON:\n"
-            '{"naver_keywords":["kw1",...20],"google_keywords":["kw1",...20]}'
+            '{"naver_keywords":["kw1",...30],"google_keywords":["kw1",...30]}'
         )
 
-        # ensure_ascii=True: 한글 → \uXXXX 이스케이프 (ASCII만 사용)
         payload_str = json.dumps({
-            "model":    "claude-sonnet-4-6",
-            "max_tokens": 1500,
-            "messages": [{"role": "user", "content": prompt}],
+            "model":      "claude-sonnet-4-6",
+            "max_tokens": 2000,
+            "messages":   [{"role": "user", "content": prompt}],
         }, ensure_ascii=True)
 
         r = requests.post(
@@ -415,7 +515,7 @@ def get_claude_longtail(main_keyword, api_key):
                 google = [_sanitize_keyword(k) for k in d.get("google_keywords", []) if k]
                 return [k for k in naver if len(k) >= 2], [k for k in google if len(k) >= 2]
         else:
-            st.warning(f"Claude API 오류[{r.status_code}]: {r.text[:200]}")
+            st.warning(f"Claude API [{r.status_code}]: {r.text[:200]}")
     except Exception as e:
         st.warning(f"Claude API 오류: {e}")
     return [], []
@@ -909,65 +1009,59 @@ if run_btn:
     prog = st.progress(0, text="분석 준비 중...")
     log  = st.empty()
 
-    # ① 자동완성
-    log.info("① 네이버 연관 키워드 수집 중...")
-    naver_sug = get_naver_suggest(main_keyword.strip())
-    prog.progress(8, text=f"① 완료 — 네이버 자동완성 {len(naver_sug)}개 수집")
+    # ══════════════════════════════════════════════
+    # 3단계 하이브리드 방식
+    # 1단계: 실제 검색 데이터 수집 (자동완성)
+    # 2단계: Claude로 패턴 기반 확장
+    # 3단계: 네이버 검색량 검증
+    # ══════════════════════════════════════════════
+
+    # ── 1단계: 네이버 자동완성 다중 확장 (실제 검색 패턴)
+    log.info("① 네이버 실제 검색 패턴 수집 중... (다중 조합 자동완성)")
+    naver_sug = get_naver_suggest_multi(main_keyword.strip())
+    prog.progress(15, text=f"① 완료 — 네이버 자동완성 {len(naver_sug)}개 (실제 검색 패턴)")
 
     log.info("② 구글 연관 키워드 수집 중...")
     google_sug = get_google_suggest(main_keyword.strip())
-    prog.progress(15, text=f"① 완료 — 구글 자동완성 {len(google_sug)}개 수집")
+    # 구글도 다양한 조합으로 확장
+    for intent in ["추천", "효과", "방법", "후기"]:
+        extra = get_google_suggest(f"{main_keyword.strip()} {intent}")
+        for k in extra:
+            if k not in google_sug:
+                google_sug.append(k)
+    prog.progress(22, text=f"② 완료 — 구글 자동완성 {len(google_sug)}개")
 
-    # ② Claude 롱테일
-    log.info("③ Claude AI 롱테일 생성 중... (약 10초)")
+    # ── 2단계: Claude로 실제 패턴 기반 확장
+    log.info("③ Claude AI — 실제 검색 패턴 기반 롱테일 확장 중...")
     claude_naver, claude_google = [], []
     if claude_api_key:
-        claude_naver, claude_google = get_claude_longtail(main_keyword.strip(), claude_api_key)
-        if claude_naver or claude_google:
-            prog.progress(28, text=f"② 완료 — AI 롱테일 {len(claude_naver)+len(claude_google)}개 생성")
-        else:
-            prog.progress(28, text="② Claude 생성 실패 → 자동완성 키워드로 진행")
+        claude_naver, claude_google = get_claude_longtail(
+            main_keyword.strip(), claude_api_key,
+            naver_samples=naver_sug[:15],
+            google_samples=google_sug[:15],
+        )
+        prog.progress(35, text=f"③ 완료 — AI 확장 {len(claude_naver)+len(claude_google)}개")
     else:
-        prog.progress(28, text="② Claude API 키 없음 → 자동완성으로 진행")
+        prog.progress(35, text="③ Claude API 키 없음 → 자동완성만 사용")
 
-    # ③ 통합 + 관련성 필터링
-    raw_kw = list(dict.fromkeys(
-        [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
+    # 전체 후보 키워드 통합 (자동완성 + Claude)
+    all_candidates = list(dict.fromkeys(
+        naver_sug + google_sug + claude_naver + claude_google
     ))
+    prog.progress(38, text=f"후보 키워드 통합 — {len(all_candidates)}개")
 
-    # ③ 힌트키워드 — 단일단어로만 구성 (네이버 API 공백 거부 대응)
-    main_kw_clean = main_keyword.strip()
-    main_words    = [w for w in main_kw_clean.split() if len(w) >= 2]
-    must_word     = main_words[0] if main_words else main_kw_clean
-
-    # 메인 키워드 단어들을 우선 힌트로 추가
-    core_hints = []
-    for w in main_words:
-        if w not in core_hints:
-            core_hints.append(w)
-
-    # raw_kw에서 단어 분리 후 메인단어 포함된 것만 추가
-    for kw in raw_kw:
-        for word in kw.split():
-            word = word.strip()
-            if word and len(word) >= 2 and word not in core_hints:
-                # 메인 키워드 단어 중 하나라도 포함된 단어만
-                if any(mw in word or word in mw for mw in main_words):
-                    core_hints.append(word)
-
-    all_kw  = list(dict.fromkeys(core_hints))
-    prog.progress(32, text=f"③ 힌트키워드 {len(all_kw)}개 — 모두 단일단어")
-    log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.4초 = 약 {len(all_kw)*4//10}초 소요)")
-
-    # ④ 광고 API (검색량·경쟁도)
-    naver_stats = get_naver_keyword_stats(all_kw, naver_api_key, naver_secret_key, naver_customer_id)
-    prog.progress(60, text=f"④ 완료 — 검색량 데이터 {len(naver_stats)}개 수집")
+    # ── 3단계: 네이버 검색량 검증
+    log.info(f"④ 네이버 검색량 검증 중... ({len(all_candidates)}개)")
+    naver_stats = verify_keywords_volume(
+        all_candidates, naver_api_key, naver_secret_key, naver_customer_id
+    )
+    prog.progress(70, text=f"④ 완료 — 검색량 확인 {len(naver_stats)}개")
 
     if not naver_stats:
-        st.error("⛔ 네이버 광고API 데이터가 없습니다. 30초 후 다시 시도하거나 API 키를 확인하세요.")
+        st.error("⛔ 검색량 데이터가 없습니다. API 키를 확인하거나 잠시 후 다시 시도하세요.")
         st.stop()
 
-    # 중복 제거 (relKeyword 기준)
+    # 중복 제거
     seen = set()
     unique_stats = []
     for k in naver_stats:
@@ -977,38 +1071,22 @@ if run_btn:
             unique_stats.append(k)
     naver_stats = unique_stats
 
-    # ④ API 결과 관련성 필터 — 항상 적용 (결과 없으면 없다고 표시)
+    # 관련성 필터 — 메인 키워드 단어 포함 여부
     main_words_filter = [w for w in main_keyword.strip().split() if len(w) >= 2]
     if main_words_filter:
-        # 1차: 메인 키워드 전체 포함
-        full_match = [k for k in naver_stats
-                     if main_keyword.strip().replace(" ","") in k.get("relKeyword","").replace(" ","")
-                     or main_keyword.strip() in k.get("relKeyword","")]
-        # 2차: 첫 단어 포함
-        first_match = [k for k in naver_stats
-                      if main_words_filter[0] in k.get("relKeyword","")]
-        # 3차: 어느 단어든 포함
-        any_match = [k for k in naver_stats
-                    if any(w in k.get("relKeyword","") for w in main_words_filter)]
-
-        if len(full_match) >= 3:
-            naver_stats = full_match
-            st.caption(f"🎯 완전일치 필터: {len(naver_stats)}개")
-        elif len(first_match) >= 3:
-            naver_stats = first_match
-            st.caption(f"🎯 첫단어 필터: {len(naver_stats)}개")
-        elif len(any_match) >= 3:
-            naver_stats = any_match
-            st.caption(f"🎯 연관어 필터: {len(naver_stats)}개")
-        else:
-            # 관련 결과 없음 — 빈 결과 반환 (무관한 것 표시 안 함)
-            st.warning(f"⚠️ '{main_keyword}' 관련 키워드가 네이버 DB에 거의 없습니다. "
-                      f"다른 키워드나 한글 표기(예: 피디알엔 크림)로 시도해보세요.")
-            naver_stats = []
+        relevant = [k for k in naver_stats
+                   if any(w in k.get("relKeyword","") for w in main_words_filter)]
+        if len(relevant) >= 5:
+            removed_r = len(naver_stats) - len(relevant)
+            naver_stats = relevant
+            st.caption(f"🎯 관련성 필터: {len(naver_stats)}개 / {removed_r}개 제거")
+        elif len(naver_stats) > 0:
+            st.warning(f"⚠️ '{main_keyword}' 관련 네이버 검색량 데이터가 부족합니다. (전체 {len(naver_stats)}개 표시)")
 
     # 상위 N개 선별 (검색량 기준)
     sorted_stats = sorted(naver_stats, key=lambda k: _parse_count(k.get("monthlyPcQcCnt",0))+_parse_count(k.get("monthlyMobileQcCnt",0)), reverse=True)
     top_kws = [k.get("relKeyword","") for k in sorted_stats[:top_n] if k.get("relKeyword")]
+
 
     blog_counts  = {}
     trend_map    = {}
