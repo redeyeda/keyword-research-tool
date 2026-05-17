@@ -110,12 +110,16 @@ with st.sidebar:
 
     # ── 저장 버튼 (로컬 전용 / 클라우드는 Secrets 사용)
     if cfg.get("_source") == "cloud":
-        st.success("✅ Streamlit Cloud Secrets에서 자동 로드됨")
-        st.caption("키 변경은 Streamlit Cloud 대시보드 → Secrets에서 수정하세요.")
+        loaded = []
+        if cfg.get("naver_api_key"):    loaded.append("광고API")
+        if cfg.get("naver_client_id"):  loaded.append("오픈API")
+        if cfg.get("claude_api_key"):   loaded.append("Claude")
+        st.success(f"✅ Secrets 자동 로드 ({' · '.join(loaded) if loaded else '키 없음'})")
+        st.caption("키 변경은 Streamlit Cloud → Secrets에서 수정하세요.")
     else:
         if st.button("💾 API 키 저장 (로컬)", use_container_width=True, type="primary"):
-            if not any([naver_api_key, naver_secret_key, naver_customer_id, claude_api_key]):
-                st.warning("저장할 키를 먼저 입력하세요.")
+            if not any([naver_api_key, naver_secret_key, naver_customer_id]):
+                st.warning("네이버 광고API 키를 먼저 입력하세요.")
             else:
                 ok = save_config({
                     "naver_api_key":      naver_api_key,
@@ -126,7 +130,11 @@ with st.sidebar:
                     "claude_api_key":     claude_api_key,
                 })
                 if ok:
-                    st.success("✅ 저장 완료!")
+                    saved_items = []
+                    if naver_api_key:    saved_items.append("광고API")
+                    if naver_client_id:  saved_items.append("오픈API")
+                    if claude_api_key:   saved_items.append("Claude")
+                    st.success(f"✅ 저장 완료! ({' · '.join(saved_items)})")
 
         if os.path.exists(CONFIG_FILE):
             mtime = datetime.fromtimestamp(os.path.getmtime(CONFIG_FILE))
@@ -212,12 +220,13 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.warning("유효한 키워드가 없습니다.")
         return []
 
-    # 첫 번째 키워드로 API 연결 사전 테스트
+    # 사전 테스트 — 공백 없는 단순 키워드로 연결 확인
+    test_kw   = clean_kw[0].split()[0]   # 첫 단어만 사용 (공백 없음)
     test_hdrs = _make_ad_headers(api_key, secret_key, cid, path)
     try:
         test_r = requests.get(
             BASE + path, headers=test_hdrs,
-            params={"hintKeywords": clean_kw[0], "showDetail": "1"},
+            params={"hintKeywords": test_kw, "showDetail": "1"},
             timeout=15,
         )
         if test_r.status_code == 403:
@@ -228,6 +237,9 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             return []
         elif test_r.status_code == 200:
             first_results = test_r.json().get("keywordList", [])
+        elif test_r.status_code == 400:
+            # 400이면 키워드 문제 — 빈 결과로 계속 진행
+            first_results = []
         else:
             st.error(f"API 오류[{test_r.status_code}] — {test_r.text[:200]}")
             return []
@@ -238,7 +250,7 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     st.caption(f"📋 API 연결 확인 완료 — {len(clean_kw)}개 키워드 조회 시작...")
     results    = first_results[:]
     fail_count = 0
-    start_idx  = 1
+    start_idx  = 0   # 전체 키워드 처음부터 처리
 
 
     results    = []
