@@ -248,13 +248,16 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     prog_txt   = st.empty()
 
     def _call_api(kw_list):
-        """키워드 리스트로 API 호출 — params 방식 (requests가 올바르게 인코딩)"""
+        """키워드 1개 API 호출 — 단일 키워드만 전송 (쉼표 인코딩 문제 방지)"""
         hdrs = _make_ad_headers(api_key, secret_key, cid, path)
+        kw   = kw_list[0] if kw_list else ""
+        if not kw:
+            return 400, None
         try:
             r = requests.get(
                 BASE + path,
                 headers=hdrs,
-                params={"hintKeywords": ",".join(kw_list), "showDetail": "1"},
+                params={"hintKeywords": kw, "showDetail": "1"},
                 timeout=15,
             )
             return r.status_code, r
@@ -262,53 +265,40 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             return 0, None
 
     processed = 0
-    i = 0
-    while i < total_kw:
-        # 5개씩 배치 처리
-        batch = clean_kw[i:i+5]
-        status, r = _call_api(batch)
+    # 1개씩 처리 (쉼표 인코딩 문제 완전 방지)
+    for i, kw in enumerate(clean_kw):
+        status, r = _call_api([kw])
 
         if status == 200:
             results.extend(r.json().get("keywordList", []))
-            processed += len(batch)
-
+            processed += 1
         elif status == 403:
-            st.error(f"❌ API 인증 실패[403] — API 키를 확인하세요: {r.text[:300] if r else '응답없음'}")
+            st.error(f"❌ API 인증 실패[403]: {r.text[:200] if r else ''}")
             prog_bar.empty(); prog_txt.empty()
             return results if results else []
-
         elif status == 429:
             prog_txt.caption("⏳ API 과호출 — 3초 대기 후 재시도...")
             time.sleep(3.0)
-            continue
-
-        elif status == 400:
-            # 파라미터 오류 — 스킵 (단어 분리 안 함, 무관 키워드 유입 방지)
-            fail_count += len(batch)
-
-        elif status == 403:
-            st.error(f"❌ API 인증 실패[403]: {r.text[:300] if r else ''}")
-            prog_bar.empty(); prog_txt.empty()
-            return results if results else []
-
+            status2, r2 = _call_api([kw])
+            if status2 == 200:
+                results.extend(r2.json().get("keywordList", []))
+                processed += 1
+            else:
+                fail_count += 1
         elif status == 0:
-            st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근이 차단되었을 수 있습니다.")
+            st.error("❌ 네트워크 연결 오류")
             prog_bar.empty(); prog_txt.empty()
             return results if results else []
-
         else:
-            if fail_count == 0 and r:
-                st.warning(f"⚠️ API 오류[{status}]: {r.text[:300]}")
-            fail_count += len(batch)
+            fail_count += 1
 
-        i += 5
-        pct = min(int(i / total_kw * 100), 100)
+        pct = min(int((i + 1) / total_kw * 100), 100)
         prog_bar.progress(pct)
         prog_txt.caption(
-            f"🔍 광고API 조회 중... {min(i, total_kw)}/{total_kw}개 "
+            f"🔍 광고API 조회 중... {i+1}/{total_kw}개 "
             f"| ✅ 성공 {len(results)}건 | ❌ 실패 {fail_count}건"
         )
-        time.sleep(0.4)
+        time.sleep(0.35)
 
     prog_bar.empty()
     prog_txt.empty()
@@ -319,6 +309,7 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("모든 키워드 조회 실패. 30초 후 다시 시도하거나 API 키를 확인하세요.")
 
     return results
+
 
 
 def _sanitize_keyword(k):
