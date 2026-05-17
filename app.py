@@ -229,13 +229,9 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
 
     # 키워드 정제 — 네이버 API 유효성 기준 (엄격)
     def _is_valid_hint(kw):
-        """네이버 hintKeywords 유효성 검사"""
+        """네이버 hintKeywords 유효성 검사 — 공백 없는 단일 단어만 허용"""
         if not kw or len(kw) < 2: return False
-        # 공백 있는 키워드: 모든 단어가 한글(2자이상)이어야 함
-        if " " in kw:
-            words = kw.split()
-            return all(len(re.sub(r"[^가-힣]", "", w)) >= 2 for w in words)
-        # 공백 없는 키워드: 한글 2자 이상 OR 영문만 2자 이상
+        if " " in kw: return False  # 공백 포함 키워드 전면 거부
         korean = re.sub(r"[^가-힣]", "", kw)
         if len(korean) >= 2: return True
         if re.match(r"^[a-zA-Z0-9]{2,}$", kw): return True
@@ -248,15 +244,11 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
         k = " ".join(k.split()).strip()
         if not k: continue
-        if _is_valid_hint(k):
-            if k not in clean_kw:
-                clean_kw.append(k)
-        else:
-            # 유효하지 않으면 단어 분리 후 한글 단어만 추가
-            for word in k.split():
-                if word and len(re.sub(r"[^가-힣]", "", word)) >= 2:
-                    if word not in clean_kw:
-                        clean_kw.append(word)
+        # 모든 키워드를 단어 단위로 분리해서 추가 (공백 제거)
+        for word in k.split():
+            word = word.strip()
+            if _is_valid_hint(word) and word not in clean_kw:
+                clean_kw.append(word)
 
 
     if not clean_kw:
@@ -943,27 +935,28 @@ if run_btn:
         [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
     ))
 
-    # ③ 힌트키워드 설계 — 메인 키워드 중심으로만 구성
+    # ③ 힌트키워드 — 단일단어로만 구성 (네이버 API 공백 거부 대응)
     main_kw_clean = main_keyword.strip()
     main_words    = [w for w in main_kw_clean.split() if len(w) >= 2]
+    must_word     = main_words[0] if main_words else main_kw_clean
 
-    # 핵심 힌트 구성: 메인 키워드 자체 + 단어 분리
-    core_hints = [main_kw_clean]
+    # 메인 키워드 단어들을 우선 힌트로 추가
+    core_hints = []
     for w in main_words:
         if w not in core_hints:
             core_hints.append(w)
 
-    # 자동완성/AI 결과 중 핵심단어 ALL 포함된 것만 추가
-    # (단어가 1개면 그 단어, 2개 이상이면 첫 번째 핵심단어 필수)
-    must_word = main_words[0] if main_words else ""
-    if must_word:
-        for kw in raw_kw:
-            if kw not in core_hints and must_word in kw:
-                core_hints.append(kw)
+    # raw_kw에서 단어 분리 후 메인단어 포함된 것만 추가
+    for kw in raw_kw:
+        for word in kw.split():
+            word = word.strip()
+            if word and len(word) >= 2 and word not in core_hints:
+                # 메인 키워드 단어 중 하나라도 포함된 단어만
+                if any(mw in word or word in mw for mw in main_words):
+                    core_hints.append(word)
 
     all_kw  = list(dict.fromkeys(core_hints))
-    removed = len(raw_kw) - len(all_kw)
-    prog.progress(32, text=f"③ 핵심 힌트키워드 — {len(all_kw)}개 ('{must_word}' 필수 포함)")
+    prog.progress(32, text=f"③ 힌트키워드 {len(all_kw)}개 — 모두 단일단어")
     log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.4초 = 약 {len(all_kw)*4//10}초 소요)")
 
     # ④ 광고 API (검색량·경쟁도)
