@@ -282,50 +282,14 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             time.sleep(3.0)
             continue
 
-        elif status == 400 and len(batch) > 1:
-            # 배치 실패 → 개별 처리로 폴백
-            for single_kw in batch:
-                s2, r2 = _call_api([single_kw])
-                if s2 == 200:
-                    results.extend(r2.json().get("keywordList", []))
-                    processed += 1
-                elif s2 == 403:
-                    st.error(f"❌ API 인증 실패[403]: {r2.text[:300] if r2 else ''}")
-                    prog_bar.empty(); prog_txt.empty()
-                    return results if results else []
-                elif s2 == 400:
-                    # 단어 단위로 분리해서 재시도 (다중 단어 키워드 처리)
-                    words = single_kw.split()
-                    sub_ok = False
-                    for word in words:
-                        if len(word) < 2: continue
-                        s3, r3 = _call_api([word])
-                        if s3 == 200:
-                            results.extend(r3.json().get("keywordList", []))
-                            sub_ok = True
-                        time.sleep(0.3)
-                    if not sub_ok:
-                        fail_count += 1
-                elif s2 == 0:
-                    st.error("❌ 네트워크 연결 오류")
-                    prog_bar.empty(); prog_txt.empty()
-                    return results if results else []
-                else:
-                    fail_count += 1
-                time.sleep(0.4)
-        elif status == 400 and len(batch) == 1:
-            # 단어 분리 재시도
-            words = batch[0].split()
-            sub_ok = False
-            for word in words:
-                if len(word) < 2: continue
-                s2, r2 = _call_api([word])
-                if s2 == 200:
-                    results.extend(r2.json().get("keywordList", []))
-                    sub_ok = True
-                time.sleep(0.3)
-            if not sub_ok:
-                fail_count += 1
+        elif status == 400:
+            # 파라미터 오류 — 스킵 (단어 분리 안 함, 무관 키워드 유입 방지)
+            fail_count += len(batch)
+
+        elif status == 403:
+            st.error(f"❌ API 인증 실패[403]: {r.text[:300] if r else ''}")
+            prog_bar.empty(); prog_txt.empty()
+            return results if results else []
 
         elif status == 0:
             st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근이 차단되었을 수 있습니다.")
@@ -963,12 +927,29 @@ if run_btn:
     else:
         prog.progress(28, text="② Claude API 키 없음 → 자동완성으로 진행")
 
-    # ③ 통합
-    all_kw = list(dict.fromkeys(
+    # ③ 통합 + 관련성 필터링
+    raw_kw = list(dict.fromkeys(
         [main_keyword.strip()] + naver_sug + google_sug + claude_naver + claude_google
     ))
-    prog.progress(32, text=f"③ 키워드 통합 완료 — 총 {len(all_kw)}개 (중복제거)")
-    log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.5초 = 약 {len(all_kw)//2}초 소요)")
+
+    # 메인 키워드 단어 추출 (2자 이상)
+    main_words = [w for w in main_keyword.strip().split() if len(w) >= 2]
+
+    # ② 힌트키워드 필터 — 메인 키워드 단어 중 하나라도 포함된 것만 사용
+    if main_words:
+        filtered_kw = [main_keyword.strip()]  # 메인 키워드는 항상 포함
+        for kw in raw_kw[1:]:
+            if any(w in kw for w in main_words):
+                filtered_kw.append(kw)
+        # 필터 후 너무 적으면 원본 유지
+        all_kw = filtered_kw if len(filtered_kw) >= 5 else raw_kw
+    else:
+        all_kw = raw_kw
+
+    all_kw = list(dict.fromkeys(all_kw))  # 중복 제거
+    removed = len(raw_kw) - len(all_kw)
+    prog.progress(32, text=f"③ 키워드 필터링 완료 — {len(all_kw)}개 (비관련 {removed}개 제거)")
+    log.info(f"④ 네이버 검색량 조회 중... ({len(all_kw)}개 × 0.4초 = 약 {len(all_kw)*4//10}초 소요)")
 
     # ④ 광고 API (검색량·경쟁도)
     naver_stats = get_naver_keyword_stats(all_kw, naver_api_key, naver_secret_key, naver_customer_id)
@@ -987,6 +968,17 @@ if run_btn:
             seen.add(kw)
             unique_stats.append(k)
     naver_stats = unique_stats
+
+    # ③ 결과 관련성 필터링 — 메인 키워드 단어 포함 여부
+    main_words_filter = [w for w in main_keyword.strip().split() if len(w) >= 2]
+    if main_words_filter and len(naver_stats) > 20:
+        relevant = [k for k in naver_stats
+                   if any(w in k.get("relKeyword","") for w in main_words_filter)]
+        # 필터 후 20개 이상이면 적용, 아니면 원본 유지
+        if len(relevant) >= 20:
+            removed_r = len(naver_stats) - len(relevant)
+            naver_stats = relevant
+            st.caption(f"🎯 관련성 필터링: {len(naver_stats)}개 유지 (비관련 {removed_r}개 제거)")
 
     # 상위 N개 선별 (검색량 기준)
     sorted_stats = sorted(naver_stats, key=lambda k: _parse_count(k.get("monthlyPcQcCnt",0))+_parse_count(k.get("monthlyMobileQcCnt",0)), reverse=True)
