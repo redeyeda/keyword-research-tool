@@ -227,15 +227,31 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
-    # 키워드 정제 — 한글·영문·숫자·공백만 허용
+    # 키워드 정제 — 네이버 API 유효성 기준 적용
+    def _is_valid_hint(kw):
+        if not kw or len(kw) < 2: return False
+        # 한글 2자 이상 포함 → 유효
+        if len(re.sub(r"[^가-힣]", "", kw)) >= 2: return True
+        # 영문만 + 공백없음 + 2자 이상 → 유효
+        if re.match(r"^[a-zA-Z0-9]{2,}$", kw): return True
+        return False
+
     clean_kw = []
     for k in keywords:
         if not k: continue
         k = str(k).strip()
         k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
         k = " ".join(k.split()).strip()
-        if len(k) >= 2 and k not in clean_kw:
-            clean_kw.append(k)
+        if not k: continue
+        if _is_valid_hint(k):
+            if k not in clean_kw:
+                clean_kw.append(k)
+        elif " " in k:
+            # 혼합/복합 키워드 → 한글 단어만 분리해서 추가
+            for word in k.split():
+                if _is_valid_hint(word) and word not in clean_kw:
+                    clean_kw.append(word)
+
 
     if not clean_kw:
         st.warning("유효한 키워드가 없습니다.")
