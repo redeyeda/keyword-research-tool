@@ -251,14 +251,14 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
             processed += len(batch)
 
         elif status == 403:
-            st.error(f"API 인증 실패[403] — API 키를 확인하세요.")
+            st.error(f"❌ API 인증 실패[403] — API 키를 확인하세요: {r.text[:300] if r else '응답없음'}")
             prog_bar.empty(); prog_txt.empty()
             return results if results else []
 
         elif status == 429:
             prog_txt.caption("⏳ API 과호출 — 3초 대기 후 재시도...")
             time.sleep(3.0)
-            continue  # 같은 배치 재시도
+            continue
 
         elif status == 400 and len(batch) > 1:
             # 배치 실패 → 개별 처리로 폴백
@@ -268,14 +268,32 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
                     results.extend(r2.json().get("keywordList", []))
                     processed += 1
                 elif s2 == 403:
-                    st.error("API 인증 실패[403]")
+                    st.error(f"❌ API 인증 실패[403]: {r2.text[:300] if r2 else ''}")
+                    prog_bar.empty(); prog_txt.empty()
+                    return results if results else []
+                elif s2 == 400:
+                    # 개별도 400 → 첫 번째 실패만 화면에 표시
+                    if fail_count == 0:
+                        st.warning(f"⚠️ 키워드 [{single_kw}] 조회실패[400]: {r2.text[:200] if r2 else ''}")
+                    fail_count += 1
+                elif s2 == 0:
+                    st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근 차단 가능성")
                     prog_bar.empty(); prog_txt.empty()
                     return results if results else []
                 else:
+                    if fail_count == 0:
+                        st.warning(f"⚠️ 예상치 못한 오류[{s2}]: {r2.text[:200] if r2 else ''}")
                     fail_count += 1
                 time.sleep(0.4)
 
+        elif status == 0:
+            st.error("❌ 네트워크 연결 오류 — Streamlit Cloud에서 네이버 API 접근이 차단되었을 수 있습니다.")
+            prog_bar.empty(); prog_txt.empty()
+            return results if results else []
+
         else:
+            if fail_count == 0 and r:
+                st.warning(f"⚠️ API 오류[{status}]: {r.text[:300]}")
             fail_count += len(batch)
 
         i += 5
