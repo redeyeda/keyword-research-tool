@@ -198,23 +198,48 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
         st.error("CUSTOMER_ID가 비어있습니다.")
         return []
 
-    # 키워드 정제 — 특수문자·제어문자만 제거
+    # 키워드 정제 — 한글·영문·숫자·공백만 허용 (네이버 API 안전)
     clean_kw = []
     for k in keywords:
         if not k: continue
         k = str(k).strip()
-        # 쉼표·제어문자 제거 후 공백 정리
-        k = re.sub(r"[\r\n\t]", " ", k)
+        k = re.sub(r"[^가-힣a-zA-Z0-9 ]", "", k)
         k = " ".join(k.split()).strip()
-        # 최소 1자 이상
-        if len(k) >= 1 and k not in clean_kw:
+        if len(k) >= 2 and k not in clean_kw:
             clean_kw.append(k)
 
     if not clean_kw:
         st.warning("유효한 키워드가 없습니다.")
         return []
-    
-    st.caption(f"📋 정제된 키워드 {len(clean_kw)}개로 조회 시작...")
+
+    # 첫 번째 키워드로 API 연결 사전 테스트
+    test_hdrs = _make_ad_headers(api_key, secret_key, cid, path)
+    try:
+        test_r = requests.get(
+            BASE + path, headers=test_hdrs,
+            params={"hintKeywords": clean_kw[0], "showDetail": "1"},
+            timeout=15,
+        )
+        if test_r.status_code == 403:
+            st.error(f"API 인증 실패[403] — API 키를 확인하세요: {test_r.text[:200]}")
+            return []
+        elif test_r.status_code == 429:
+            st.error("API 호출 한도 초과[429] — 잠시 후 다시 시도하세요.")
+            return []
+        elif test_r.status_code == 200:
+            first_results = test_r.json().get("keywordList", [])
+        else:
+            st.error(f"API 오류[{test_r.status_code}] — {test_r.text[:200]}")
+            return []
+    except Exception as e:
+        st.error(f"API 연결 오류: {e}")
+        return []
+
+    st.caption(f"📋 API 연결 확인 완료 — {len(clean_kw)}개 키워드 조회 시작...")
+    results    = first_results[:]
+    fail_count = 0
+    start_idx  = 1
+
 
     results    = []
     fail_count = 0
@@ -224,7 +249,7 @@ def get_naver_keyword_stats(keywords, api_key, secret_key, customer_id):
     prog_bar = st.progress(0)
     prog_txt = st.empty()
 
-    for idx, kw in enumerate(clean_kw):
+    for idx, kw in enumerate(clean_kw[start_idx:], start=start_idx):
         fetched   = False
         wait_time = 0.5  # 기본 대기 시간
 
